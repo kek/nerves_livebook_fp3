@@ -89,18 +89,18 @@ config :livebook,
 # symlink to /root, so /data/... and /root/... are the same storage.
 config :nerves_livebook_fp3, notebooks_dest: "/data/livebook/notebooks"
 
-# The Fairphone 3 profile pins VM threads to the fast cluster at boot and
-# runs the first-boot partition grow (configured below). No models and no
-# capabilities are configured: the AI notebook fetches its models and
-# starts the capabilities it needs when the phone is online.
-config :nerves_ai, profile: NervesAIFP3.Profile
+# At boot nerves_ai pins the VM's dirty schedulers to the fast cluster and
+# runs the first-boot partition grow (configured below). No models are
+# configured: the AI notebook fetches its models when the phone is online.
+# The full-speed lease taken around inference is revoked at 80 degC.
+config :nerves_ai, burst: [thermal_limit_c: 80]
 
 # Scenic's asset library (fonts); see lib/nerves_livebook_fp3/assets.ex.
 config :scenic, :assets, module: NervesLivebookFP3.Assets
 
 # First-boot grow of the /root partition and its F2FS, run once by the
-# nerves_ai profile, which merges these values over its own (idempotent: the
-# resizer reports :already_grown once the FS fills userdata). A phone
+# nerves_ai at boot (idempotent: the resizer reports :already_grown once the
+# FS fills userdata). A phone
 # flashed with fastboot keeps the image's partition size, so the
 # partition itself is grown too, by the system's ops.fw grow-app task.
 config :nerves_data_resize, :config,

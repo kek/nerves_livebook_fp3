@@ -70,8 +70,7 @@ defmodule NervesLivebookFP3.MixProject do
         :fp3_modem,
         :ex_nfc,
         :ex_location,
-        # Runs the Fairphone 3 profile at boot: thread pinning and the
-        # first-boot data partition grow.
+        # At boot: first-boot data partition grow and thread pinning.
         :nerves_ai
       ]
     ]
@@ -108,11 +107,9 @@ defmodule NervesLivebookFP3.MixProject do
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
       # ---------------- AI stack ----------------
-      # nerves_ai composes the stack and the Fairphone 3 profile places work
-      # on the fast cluster. The capability packages are built for the phone
-      # only.
+      # nerves_ai composes the stack; cpu_governor places work on the fast
+      # cluster. The engine packages are built for the phone only.
       sibling(:nerves_ai, "NERVES_AI_PATH"),
-      sibling(:nerves_ai_fp3, "NERVES_AI_FP3_PATH"),
       sibling(:cpu_governor, "CPU_GOVERNOR_PATH"),
       sibling(:nerves_data_resize, "NERVES_DATA_RESIZE_PATH"),
       {:llama_cpp_ex, "~> 0.8", targets: :nerves_system_fp3},
