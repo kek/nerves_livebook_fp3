@@ -22,7 +22,7 @@ The AI stack has three kinds of parts:
   capability (`NervesAI.LLM`, `NervesAI.STT`, `NervesAI.Vision`), downloads
   model files with checksums (`NervesAI.Models`), reads and writes WAV files
   (`NervesAI.Audio.WAV`).
-* **`cpu_governor`** provides the CPU topology and thread pinning. At boot
+* **`cpu_topology`** provides the CPU topology and thread pinning. At boot
   `nerves_ai` uses it to pin the VM's threads that run native code to the
   fast cluster and to tell the engines to use four threads. **`nerves_data_resize`** grows the data partition on first boot
   so models fit.
@@ -36,10 +36,10 @@ The Snapdragon 632 has two clusters of four Kryo 250 cores: `cpu0-3` are
 the slower "Silver" cores and `cpu4-7` the faster "Gold" cores. Neither
 cluster has the dot-product or half-precision instructions that newer ARM
 chips use to speed up model maths, so the native libraries are built for
-plain ARMv8.0. `cpu_governor` reads the layout from `/sys`:
+plain ARMv8.0. `cpu_topology` reads the layout from `/sys`:
 
 ```elixir
-CpuGovernor.topology()
+CpuTopology.topology()
 ```
 
 ### Where the VM's threads run
@@ -47,13 +47,13 @@ CpuGovernor.topology()
 At boot `nerves_ai` pinned the BEAM's *dirty* schedulers (where
 native code such as llama.cpp runs, and whose threads the engines' worker
 pools inherit their CPUs from) to the Gold cores `cpu4-7`, and the normal
-schedulers to `cpu0-3`. `CpuGovernor.Affinity.report/1` lists the threads.
+schedulers to `cpu0-3`. `CpuTopology.Affinity.report/1` lists the threads.
 `outside` holds the dirty threads that are allowed on a CPU outside the
 expected ones:
 
 ```elixir
-gold = CpuGovernor.fastest_cpus()
-report = CpuGovernor.Affinity.report(expect: gold)
+gold = CpuTopology.fastest_cpus()
+report = CpuTopology.Affinity.report(expect: gold)
 
 for t <- report.by_class.dirty do
   %{thread: t.name, allowed_cpus: Enum.join(t.allowed, ","), last_ran_on: t.cpu}

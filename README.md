@@ -68,7 +68,7 @@ the phone to Wi-Fi, and start the matching capability (`NervesAI.LLM`,
 * Rust 1.98 or newer with the `aarch64-unknown-linux-gnu` target
   (`rustup toolchain install 1.99.0 -t aarch64-unknown-linux-gnu`, then
   `RUSTUP_TOOLCHAIN=1.99.0`), and `cmake` and `git`. `whisper_cpp`,
-  `llama_cpp_ex` and `cpu_governor` build their native code from source for
+  `llama_cpp_ex` and `cpu_topology` build their native code from source for
   the phone's ARMv8.0 cores: `mix.exs` sets the flags for target builds
   (plain `armv8-a`, no dot-product or fp16 instructions; the precompiled
   `whisper_cpp` artifact needs ARMv8.2 and is never used).
@@ -126,7 +126,7 @@ mix upload
 nerves_livebook_fp3
 ├── nerves_system_fp3   kernel, bootloader glue, daemons (rmtfs, qbootctl, …)
 ├── nerves_ai           the AI composer: LLM / STT / Vision facades, model downloads, WAV
-│   ├── cpu_governor    topology, thread affinity (Rust NIF)
+│   ├── cpu_topology    topology, thread affinity (Rust NIF)
 │   └── nerves_data_resize  first-boot F2FS grow
 ├── llama_cpp_ex        LLM engine (llama.cpp)
 ├── whisper_cpp         speech to text engine (whisper.cpp, Silero VAD)

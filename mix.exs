@@ -21,7 +21,7 @@ defmodule NervesLivebookFP3.MixProject do
           {"WHISPER_CPP_BUILD", "1"},
           {"GGML_NATIVE", "OFF"},
           {"GGML_CPU_ARM_ARCH", "armv8-a"},
-          # Rust NIFs (whisper_cpp, cpu_governor) cross-compile with the Nerves
+          # Rust NIFs (whisper_cpp, cpu_topology) cross-compile with the Nerves
           # toolchain, which is on PATH while dependencies compile. whisper-rs-sys
           # uses its bundled bindings instead of generating them with libclang.
           {"CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu"},
@@ -107,10 +107,10 @@ defmodule NervesLivebookFP3.MixProject do
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
       # ---------------- AI stack ----------------
-      # nerves_ai composes the stack; cpu_governor places work on the fast
+      # nerves_ai composes the stack; cpu_topology places work on the fast
       # cluster. The engine packages are built for the phone only.
       sibling(:nerves_ai, "NERVES_AI_PATH"),
-      sibling(:cpu_governor, "CPU_GOVERNOR_PATH"),
+      sibling(:cpu_topology, "CPU_TOPOLOGY_PATH"),
       sibling(:nerves_data_resize, "NERVES_DATA_RESIZE_PATH"),
       {:llama_cpp_ex, "~> 0.8", targets: :nerves_system_fp3},
       {:whisper_cpp, "~> 0.5", targets: :nerves_system_fp3},
@@ -121,7 +121,7 @@ defmodule NervesLivebookFP3.MixProject do
       # `env: :dev` makes nx_eigen build from source with the Nerves toolchain:
       # its precompiled aarch64 NIF links FFTW, which the system image lacks.
       {:nx_eigen, "~> 0.2", targets: :nerves_system_fp3, env: :dev},
-      # Builds whisper_cpp from source and cpu_governor's NIF from its crate.
+      # Builds whisper_cpp from source and cpu_topology's NIF from its crate.
       {:rustler, "~> 0.38.0", runtime: false},
 
       # ---------------- FP3 hardware userspace ----------------
