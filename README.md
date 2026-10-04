@@ -8,7 +8,8 @@
 
 Workshop firmware for the Fairphone 3 and 3+. It boots straight into a
 Livebook with the [`nerves_ai`](https://github.com/mlainez/nerves_ai)
-edge-AI stack and the Fairphone 3 hardware libraries loaded.
+edge-AI stack (LLM, speech to text and object detection) and the
+Fairphone 3 hardware libraries loaded.
 
 ## At workshop time
 
@@ -33,7 +34,7 @@ edge-AI stack and the Fairphone 3 hardware libraries loaded.
 | `09_bluetooth.livemd` | Scan for BLE devices, advertise the phone, share its battery level over GATT |
 | `10_audio.livemd` | Loudspeaker, earpiece and microphone: tones, recording, playback |
 | `11_screen_touch_buttons.livemd` | Draw on the screen, touch input, volume and power buttons |
-| `12_ai_on_the_phone.livemd` | The AI stack, then a ladder: Nx tensors and NEON speed, YOLO object detection, Whisper speech to text, TinyLlama chat |
+| `12_ai_on_the_phone.livemd` | The AI stack, CPU placement, Nx speed, YOLO object detection, Whisper speech to text, TinyLlama chat, generated sound |
 
 Notebooks ship in `priv/samples` and are copied to
 `/data/livebook/notebooks` at boot, then starred so they appear on
@@ -52,10 +53,11 @@ successful.
 
 Models are too large for the firmware image (the root filesystem is
 250 MiB), and nothing downloads them at boot. Each AI notebook fetches
-the model it needs with `NervesModelHub.ensure_one/2` the first time it
-runs: the phone downloads it from Hugging Face over Wi-Fi into
-`/data/models`, checks its SHA-256, and reuses it afterwards. The notebooks include a
-cell to connect the phone to Wi-Fi.
+the model it needs with `NervesAI.Models.ensure_one/3` the first time it
+runs: the phone downloads it over Wi-Fi into `/data/models`, checks its
+SHA-256, and reuses it afterwards. The notebooks include a cell to connect
+the phone to Wi-Fi, and start the matching capability (`NervesAI.LLM`,
+`NervesAI.STT`, `NervesAI.Vision`) once its model is on disk.
 
 ## For the workshop organiser
 
@@ -63,9 +65,13 @@ cell to connect the phone to Wi-Fi.
 
 * Erlang/OTP 29.1.1 and Elixir 1.20.4 (see `.tool-versions`), matching
   the official Nerves systems, and the `nerves_bootstrap` archive.
-* A Rust toolchain with the `aarch64-unknown-linux-gnu` target
-  (`rustup target add aarch64-unknown-linux-gnu`). The `arm_ai` NIF has
-  no precompiled release, so it is always built from source.
+* Rust 1.98 or newer with the `aarch64-unknown-linux-gnu` target
+  (`rustup toolchain install 1.99.0 -t aarch64-unknown-linux-gnu`, then
+  `RUSTUP_TOOLCHAIN=1.99.0`), and `cmake` and `git`. `whisper_cpp`,
+  `llama_cpp_ex` and `cpu_governor` build their native code from source for
+  the phone's ARMv8.0 cores: `mix.exs` sets the flags for target builds
+  (plain `armv8-a`, no dot-product or fp16 instructions; the precompiled
+  `whisper_cpp` artifact needs ARMv8.2 and is never used).
 * An SSH public key in `~/.ssh`, which is baked into the firmware for
   `mix upload` and SSH access.
 
@@ -119,16 +125,13 @@ mix upload
 ```
 nerves_livebook_fp3
 ├── nerves_system_fp3   kernel, bootloader glue, daemons (rmtfs, qbootctl, …)
-├── nerves_ai           the AI stack
-│   ├── arm_ai          Rust NIF: candle LLM + Whisper, tract ONNX, NEON kernels
-│   ├── nx_arm          Nx backend and Defn compiler on arm_ai
-│   ├── nx_primitives   FFT, embeddings, int8 matmul/conv
-│   ├── infer_llm       Whisper STT, KV cache, sampling
-│   ├── infer_vision    YOLO, generic ONNX, image preprocessing
-│   ├── infer_audio     audio decode / resample / WAV
-│   ├── cpu_governor    scoped performance governor
-│   ├── nerves_model_hub  model downloads
+├── nerves_ai           the AI composer: LLM / STT / Vision facades, model downloads, WAV
+│   ├── nerves_ai_fp3   Fairphone 3 profile: fast-cluster pinning, 4 threads, model catalog
+│   ├── cpu_governor    topology, performance bursts, thread affinity (Rust NIF)
 │   └── nerves_data_resize  first-boot F2FS grow
+├── llama_cpp_ex        LLM engine (llama.cpp)
+├── whisper_cpp         speech to text engine (whisper.cpp, Silero VAD)
+├── evision             vision engine (OpenCV, YOLOv5n), brings nx
 ├── ex_rmtfs, ex_remoteproc   modem storage daemon, ADSP start-up
 ├── ex_qcom_smgr, fp3_camera, ex_audio, ex_nfc, ex_location, ex_qbootctl
 ├── fp3_modem, vintage_net_qmi, qmi   cellular (only with FP3_APN)

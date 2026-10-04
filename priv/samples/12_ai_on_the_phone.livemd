@@ -2,134 +2,150 @@
 
 ## Overview
 
-This notebook climbs a ladder: from plain tensor maths to three
-machine-learning models of increasing size, all running on the phone's
-CPU with no GPU or cloud service. It builds on the earlier notebooks:
-Wi-Fi (01), the camera (05) and audio (10).
+This notebook runs machine-learning models on the phone's CPU, with no GPU
+or cloud service: object detection on a camera photo, speech to text, and a
+chat with a small language model. First it looks at the CPU they run on and
+at how slowly plain Elixir tensors run on it. It builds on the earlier
+notebooks: Wi-Fi (01), the camera (05) and audio (10).
 
-## The layers
+## The stack
 
-```mermaid
-graph TD
-  nerves_ai["nerves_ai<br/>meta-package: wires backends at boot"]
-  nerves_ai --> infer_llm & infer_vision & infer_audio & nx_primitives
-  nerves_ai --> cpu_governor & nerves_model_hub & nerves_data_resize
-  infer_llm["infer_llm<br/>Whisper, LLM helpers"] --> arm_ai
-  infer_vision["infer_vision<br/>YOLO, ONNX models"] --> arm_ai
-  infer_audio["infer_audio<br/>decode, resample, WAV"] --> arm_ai
-  nx_primitives["nx_primitives<br/>FFT, embeddings, int8"] --> arm_ai
-  nx_arm["nx_arm<br/>Nx backend on NEON"] --> arm_ai
-  arm_ai["arm_ai<br/>Rust NIF: NEON kernels, candle, tract"]
-```
+The AI stack has three kinds of parts:
 
-From the bottom up:
+* **Capability packages** do the work, each a native library wrapped for
+  the BEAM: [`llama_cpp_ex`](https://hexdocs.pm/llama_cpp_ex) runs language
+  models (llama.cpp), [`whisper_cpp`](https://hexdocs.pm/whisper_cpp)
+  transcribes speech (whisper.cpp, with Silero voice detection) and
+  [`evision`](https://hexdocs.pm/evision) runs the YOLO object detector
+  (OpenCV).
+* **`nerves_ai`** is the composer. It puts one small facade in front of each
+  capability (`NervesAI.LLM`, `NervesAI.STT`, `NervesAI.Vision`), downloads
+  model files with checksums (`NervesAI.Models`), reads and writes WAV files
+  (`NervesAI.Audio.WAV`) and runs every call in a "burst" that holds the CPU
+  at full speed.
+* **`nerves_ai_fp3`** is the profile that describes this phone. At boot it
+  pins the VM's threads that run native code to the fast cluster and
+  tells the engines to use four threads. `cpu_governor` provides the
+  CPU topology, frequency control and thread pinning; `nerves_data_resize`
+  grows the data partition on first boot so models fit.
 
-* **`arm_ai`** is the engine: a Rust library loaded into the BEAM as a
-  NIF. It has NEON-optimised maths kernels, runs language models and
-  Whisper with [candle](https://github.com/huggingface/candle) and ONNX
-  models with [tract](https://github.com/sonos/tract), and decodes
-  images and audio.
-* **`nx_arm`** plugs `arm_ai` into [Nx](https://hexdocs.pm/nx), Elixir's
-  tensor library, as a backend.
-* **`nx_primitives`**, **`infer_llm`**, **`infer_vision`** and
-  **`infer_audio`** are generic Elixir libraries: each defines what it
-  needs as a behaviour (`<Library>.Backend`), and `arm_ai` provides the
-  ARM implementation. Another backend could run the same code elsewhere.
-* **`cpu_governor`**, **`nerves_model_hub`** and **`nerves_data_resize`**
-  are Nerves helpers for CPU frequency, model downloads and disk space.
-* **`nerves_ai`** depends on all of them and, at boot, tells each generic
-  library to use the `arm_ai` backend.
-
-## The repositories
-
-| Library | What it does |
-|---|---|
-| [`arm_ai`](https://github.com/mlainez/arm_ai) | Rust NIF: NEON kernels, candle LLM and Whisper, tract ONNX, image and audio decoding |
-| [`nx_arm`](https://github.com/mlainez/nx_arm) | `Nx.Backend` and `Nx.Defn.Compiler` on NEON |
-| [`nx_primitives`](https://github.com/mlainez/nx_primitives) | FFT, embeddings, int8 matrix maths |
-| [`infer_llm`](https://github.com/mlainez/infer_llm) | Whisper speech-to-text, sampling, KV cache helpers |
-| [`infer_vision`](https://github.com/mlainez/infer_vision) | YOLO object detection, generic ONNX models, image preprocessing |
-| [`infer_audio`](https://github.com/mlainez/infer_audio) | Audio decoding, resampling, WAV writing |
-| [`cpu_governor`](https://github.com/mlainez/cpu_governor) | big.LITTLE topology, running code at full CPU speed |
-| [`nerves_model_hub`](https://github.com/mlainez/nerves_model_hub) | Download models from Hugging Face or any URL, with checksums |
-| [`nerves_data_resize`](https://github.com/mlainez/nerves_data_resize) | Grows the data partition on first boot so models fit |
-| [`nerves_ai`](https://github.com/mlainez/nerves_ai) | Meta-package that ties the stack together |
-
-The TinyLlama chat at the end calls `ArmAI.LlamaCandle` in `arm_ai` directly.
-
-## The backends on this phone
-
-Each generic library reads its backend from its application config;
-`nerves_ai` set these at boot:
-
-```elixir
-for app <- [:nx_primitives, :infer_llm, :infer_vision, :infer_audio] do
-  {app, Application.get_env(app, :backend)}
-end
-```
-
-
-## Nx in one paragraph
-
-`Nx` is Elixir's numerical library: multi-dimensional tensors and the
-maths on them, the building block for machine learning in Elixir.
-`nx_arm` gives Nx a backend that runs on the phone's ARM NEON vector
-unit, across all its cores.
+Nothing is configured to start at boot. This notebook downloads each model
+when you need it and starts the matching capability with `Kino.start_child/1`.
 
 ## The CPU
 
-The Snapdragon 632 has two clusters of four Kryo 250 cores ("big" and
-"LITTLE"). `cpu_governor` reads the layout from `/sys`:
+The Snapdragon 632 has two clusters of four Kryo 250 cores: `cpu0-3` are
+the slower "Silver" cores and `cpu4-7` the faster "Gold" cores. Neither
+cluster has the dot-product or half-precision instructions that newer ARM
+chips use to speed up model maths, so the native libraries are built for
+plain ARMv8.0. `cpu_governor` reads the layout from `/sys`:
 
 ```elixir
 CpuGovernor.topology()
 ```
 
-## Tensors
-
-Tensors live in a backend. `NxArm.Backend` keeps them as binaries and
-computes with NEON-optimised native code.
+What can this user change on this phone? Frequency control, temperature
+readings and thread pinning:
 
 ```elixir
-a = Nx.tensor([[1.0, 2.0], [3.0, 4.0]], backend: NxArm.Backend)
-b = Nx.tensor([[0.5, 0.0], [0.0, 2.0]], backend: NxArm.Backend)
-
-{Nx.dot(a, b), Nx.exp(a), Nx.sum(a)}
+CpuGovernor.capabilities()
 ```
 
-## How much faster is NEON?
+### Where the VM's threads run
 
-The same 128×128 matrix multiplication on Nx's pure-Elixir backend and
-on NEON. `CpuGovernor.with_performance/1` runs the cores at full speed
-for the duration and restores the previous setting afterwards.
+The `nerves_ai_fp3` profile pinned the BEAM's *dirty* schedulers (where
+native code such as llama.cpp runs, and whose threads the engines' worker
+pools inherit their CPUs from) to the Gold cores `cpu4-7`, and the normal
+schedulers to `cpu0-3`. `CpuGovernor.Affinity.report/1` lists the threads.
+`outside` holds the dirty threads that are allowed on a CPU outside the
+expected ones:
 
 ```elixir
+gold = CpuGovernor.fastest_cpus()
+report = CpuGovernor.Affinity.report(expect: gold)
+
+for t <- report.by_class.dirty do
+  %{thread: t.name, allowed_cpus: Enum.join(t.allowed, ","), last_ran_on: t.cpu}
+end
+|> Kino.DataTable.new()
+```
+
+```elixir
+%{expected: gold, outside: length(report.outside)}
+```
+
+### Does the performance burst help?
+
+`CpuGovernor.with_performance/1` holds the Gold cluster at full speed for
+the duration of a function and restores the previous setting afterwards.
+The `nerves_ai` facades do this around every model call.
+
+The work here is a SHA-256 over 64 MB: the crypto NIF runs large inputs on a
+dirty scheduler, which the profile pinned to the Gold cores. Each variant
+runs three times; the table shows milliseconds.
+
+```elixir
+data = :crypto.strong_rand_bytes(64_000_000)
+
 time_ms = fn fun ->
   {us, _} = :timer.tc(fun)
   Float.round(us / 1000, 1)
 end
 
-x = Nx.iota({128, 128}, type: :f32) |> Nx.divide(1000)
+work = fn -> :crypto.hash(:sha256, data) end
 
-CpuGovernor.with_performance(fn ->
-  plain = Nx.backend_transfer(x, Nx.BinaryBackend)
-  neon = Nx.backend_transfer(x, NxArm.Backend)
-  Nx.dot(neon, neon)
-
-  %{
-    pure_elixir_ms: time_ms.(fn -> Nx.dot(plain, plain) end),
-    neon_ms: time_ms.(fn -> Nx.dot(neon, neon) end)
-  }
-end)
+%{
+  plain_ms: for(_ <- 1..3, do: time_ms.(work)),
+  with_performance_ms:
+    for(_ <- 1..3, do: time_ms.(fn -> CpuGovernor.with_performance(work) end))
+}
 ```
+
+If both rows match, the cores were already at full speed (or `/sys` is
+read-only, see `capabilities/0` above) and the burst changes nothing.
+
+## Tensors on the BEAM
+
+[Nx](https://hexdocs.pm/nx) is Elixir's tensor library. The default
+`Nx.BinaryBackend` is written in plain Elixir: portable, and slow. The
+models in this notebook don't use it, but evision brings Nx along and image
+code in Elixir would. Here is what a 640×640 RGB `u8` image costs on this
+phone for the steps a YOLO pre-processing needs (milliseconds, best of
+three). Your notebook process runs on a normal scheduler, so on the Silver
+cores.
+
+```elixir
+img = Nx.broadcast(Nx.u8(128), {640, 640, 3})
+floats = Nx.as_type(img, :f32)
+
+best_ms = fn fun ->
+  1..3
+  |> Enum.map(fn _ ->
+    {us, _} = :timer.tc(fn -> fun.() end)
+    us / 1000
+  end)
+  |> Enum.min()
+  |> Float.round(1)
+end
+
+%{
+  pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
+  transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
+  as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
+  divide_255: best_ms.(fn -> Nx.divide(floats, 255) end)
+}
+```
+
+That is why the object detector below does its image work in OpenCV rather
+than in Nx.
 
 ## Models: downloaded when you need them
 
 The next steps use trained models. They're too big for the firmware and
 none is downloaded automatically: each step fetches its model the first
-time with `NervesModelHub.ensure_one/2`, from Hugging Face (`{:hf, repo,
-file}`) or any URL. It checks the SHA-256, writes the file atomically to
-`/data/models`, and skips the download when the file is already there.
+time with `NervesAI.Models.ensure_one/3`. It checks the SHA-256, writes the
+file atomically to `/data/models` and skips the download when the file is
+already there.
 
 The phone needs internet access for the first run. If this doesn't say
 `:internet`, connect to Wi-Fi with the Wi-Fi notebook:
@@ -138,12 +154,25 @@ The phone needs internet access for the first run. If this doesn't say
 VintageNet.get(["connection"])
 ```
 
-The model steps below download with this small helper: it returns the
-file's path, or stops with a message saying what went wrong.
+The Fairphone 3 profile has a catalog of models known to run on this phone,
+with their checksums:
 
 ```elixir
-fetch_model = fn id, spec ->
-  case NervesModelHub.ensure_one(id, spec) do
+catalog = NervesAIFP3.Profile.catalog()
+Map.keys(catalog)
+```
+
+Two helpers for the steps below: `fetch` downloads a model (printing
+progress) and returns its path, and `start` starts a capability under this
+notebook's supervisor and waits for its model to load.
+
+```elixir
+fetch = fn id, spec ->
+  progress = fn bytes, total ->
+    IO.puts("#{id}: #{div(bytes, 1_000_000)} of #{(total && div(total, 1_000_000)) || "?"} MB")
+  end
+
+  case NervesAI.Models.ensure_one(id, spec, on_progress: progress, progress_step: 50_000_000) do
     {:ok, path} ->
       path
 
@@ -152,48 +181,45 @@ fetch_model = fn id, spec ->
               "Is the phone online? Check with the Wi-Fi notebook."
   end
 end
+
+start = fn adapter, config ->
+  case Kino.start_child(adapter.child_spec(config)) do
+    {:ok, _pid} -> :ok
+    {:error, {:already_started, _pid}} -> :ok
+    {:error, reason} -> raise "Couldn't start #{inspect(adapter)}: #{inspect(reason)}"
+  end
+
+  ready =
+    Enum.any?(1..240, fn _ ->
+      adapter.ready?(config) or (Process.sleep(500) && false)
+    end)
+
+  if ready, do: :ready, else: raise("#{inspect(adapter)} didn't load its model; see the log")
+end
 ```
 
 ## Find objects in a photo (YOLO)
 
 **YOLOv5n** finds and labels objects in a picture: people, chairs,
-bottles, laptops and 76 other everyday categories. The model is 4 MB and
-comes from Ultralytics' GitHub release; `InferVision.YOLO` runs it.
+bottles, laptops and 76 other everyday categories (the COCO dataset;
+`NervesAI.Vision.COCO.labels/0` lists them). The model is 4 MB.
+`NervesAI.Vision.Evision` runs it with OpenCV and `NervesAI.Vision` is the
+interface to call.
 
 ```elixir
-yolo_path =
-  fetch_model.(:yolov5n,
-    source: {:url, "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5n.onnx"},
-    path: "/data/models/yolov5n.onnx",
-    sha256: "04f0e55c26f58d17145b36045780fe1250d5bd2187543e11568e5141d05b3262"
-  )
+yolo_path = fetch.(:yolov5n, catalog.yolov5n)
 
-{:ok, yolo} = InferVision.YOLO.load(yolo_path, decoder: InferVision.YOLO.Decoders.V5)
-```
-
-The model answers with class numbers; these are their names (the COCO
-dataset it was trained on):
-
-```elixir
-labels =
-  ~w(person bicycle car motorcycle airplane bus train truck boat traffic_light
-     fire_hydrant stop_sign parking_meter bench bird cat dog horse sheep cow
-     elephant bear zebra giraffe backpack umbrella handbag tie suitcase frisbee
-     skis snowboard sports_ball kite baseball_bat baseball_glove skateboard
-     surfboard tennis_racket bottle wine_glass cup fork knife spoon bowl banana
-     apple sandwich orange broccoli carrot hot_dog pizza donut cake chair couch
-     potted_plant bed dining_table toilet tv laptop mouse remote keyboard
-     cell_phone microwave oven toaster sink refrigerator book clock vase
-     scissors teddy_bear hair_drier toothbrush)
-  |> Enum.map(&String.replace(&1, "_", " "))
-  |> List.to_tuple()
+start.(NervesAI.Vision.Evision,
+  adapter: NervesAI.Vision.Evision,
+  path: yolo_path
+)
 ```
 
 ### Take a photo and detect
 
 Point the back of the phone at something and run the cell. It takes a
-2×2-binned photo (quicker than full resolution), scales it to the
-640×640 input YOLO expects, and lists what it found.
+2×2-binned photo (quicker than full resolution) and lists what the model
+found. Each box is `[x1, y1, x2, y2]` in pixels of the photo.
 
 ```elixir
 photo = "/tmp/detect.jpg"
@@ -201,41 +227,30 @@ IO.puts("Taking the photo...")
 {:ok, _} = Fp3Camera.snap(:rear, photo, binned: true)
 IO.puts("Looking for objects...")
 
-input =
-  InferVision.Preprocess.load_for_classifier(photo,
-    size: {640, 640},
-    mean: {0.0, 0.0, 0.0},
-    std: {1.0, 1.0, 1.0}
-  )
-
-detections = InferVision.YOLO.detect(yolo, input)
+detections = NervesAI.Vision.detect(NervesAI.Vision, photo)
 
 for d <- detections do
-  %{object: elem(labels, d.class), confidence: Float.round(d.score, 2)}
+  %{object: d.label, confidence: Float.round(d.score, 2), box: inspect(Enum.map(d.box, &round/1))}
 end
 |> Kino.DataTable.new()
 ```
 
+`detect/3` takes `conf:` (minimum score, default 0.25) and `iou:` options.
+`NervesAI.Vision.annotate/4` writes a copy of the photo with the boxes
+drawn on it; this cell draws them as an SVG instead.
+
 ### See it
 
-Boxes are in the 640×640 input's coordinates; they're scaled back to the
-photo and drawn on top of it.
-
 ```elixir
-{:ok, {_rgb, width, height}} = InferVision.Preprocess.decode_to_rgb8(photo)
-sx = width / 640
-sy = height / 640
+{height, width, _channels} = Evision.imread(photo).shape
 
 boxes =
-  for %{box: {x1, y1, x2, y2}, class: class, score: score} <- detections do
-    x = x1 * sx
-    y = y1 * sy
-
+  for %{box: [x1, y1, x2, y2], label: label, score: score} <- detections do
     """
-    <rect x="#{x}" y="#{y}" width="#{(x2 - x1) * sx}" height="#{(y2 - y1) * sy}"
+    <rect x="#{x1}" y="#{y1}" width="#{x2 - x1}" height="#{y2 - y1}"
           fill="none" stroke="yellow" stroke-width="#{width / 250}"/>
-    <text x="#{x + 6}" y="#{y + width / 30}" fill="yellow" font-size="#{width / 32}"
-          font-family="sans-serif">#{elem(labels, class)} #{round(score * 100)}%</text>
+    <text x="#{x1 + 6}" y="#{y1 + width / 30}" fill="yellow" font-size="#{width / 32}"
+          font-family="sans-serif">#{label} #{round(score * 100)}%</text>
     """
   end
 
@@ -252,84 +267,74 @@ Kino.HTML.new("""
 ## Speech to text (Whisper)
 
 **Whisper** turns speech into text. This is OpenAI's `tiny.en` model
-(English only, about 45 MB), run by `InferLLM.Whisper`.
-
-Whisper needs four files: the weights, the tokenizer and the model
-config from the `lmz/candle-whisper` Hugging Face repo, plus the mel
-filter bank from the candle repository. `NervesModelHub` fetches each
-one once and verifies its SHA-256.
+(English only, about 75 MB) in the format whisper.cpp reads, run by
+`NervesAI.STT.WhisperCpp`. A second, tiny model (about 0.9 MB), **Silero**,
+detects where speech is so silence is skipped before Whisper sees it.
 
 ```elixir
-repo = "lmz/candle-whisper"
-
-files = %{
-  model:
-    fetch_model.(:whisper_model,
-      source: {:hf, repo, "model-tiny-en-q80.gguf"},
-      path: "/data/models/whisper-tiny-en-q80.gguf",
-      sha256: "07997efe0b8d3577fc45d9b307ef578a01346f4088a5da4bd92377aaa3f72986"
-    ),
-  tokenizer:
-    fetch_model.(:whisper_tokenizer,
-      source: {:hf, repo, "tokenizer-tiny-en.json"},
-      path: "/data/models/whisper-tokenizer.json",
-      sha256: "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0"
-    ),
-  config:
-    fetch_model.(:whisper_config,
-      source: {:hf, repo, "config-tiny-en.json"},
-      path: "/data/models/whisper-config.json",
-      sha256: "b5366317df280f79e6cc366f259f379674f81a8721d458acf2e00680ccb10b1d"
-    ),
-  mel_filters:
-    fetch_model.(:whisper_mel,
-      source:
-        {:url,
-         "https://github.com/huggingface/candle/raw/main/candle-examples/examples/whisper/melfilters.bytes"},
-      path: "/data/models/melfilters.bytes",
-      sha256: "85818f156f7e189453901a515e4726d270d307f976e161cf9403e8caab405498"
-    )
-}
-
-{:ok, whisper} =
-  InferLLM.Whisper.load(
-    model: files.model,
-    tokenizer: files.tokenizer,
-    config: files.config,
-    mel_filters: files.mel_filters
+whisper_path =
+  fetch.(:whisper,
+    source: {:hf, "ggerganov/whisper.cpp", "ggml-tiny.en.bin"},
+    path: "/data/models/ggml-tiny.en.bin",
+    sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"
   )
+
+vad_path =
+  fetch.(:silero,
+    source: {:hf, "ggml-org/whisper-vad", "ggml-silero-v5.1.2.bin"},
+    path: "/data/models/ggml-silero-v5.1.2.bin",
+    sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
+  )
+
+start.(NervesAI.STT.WhisperCpp,
+  adapter: NervesAI.STT.WhisperCpp,
+  path: whisper_path,
+  vad_path: vad_path,
+  language: "en"
+)
 ```
 
 ### Transcribe a recording
 
 The firmware ships an 11-second excerpt of John F. Kennedy's 1961
-inaugural address. Whisper needs 16 kHz mono audio;
-`InferAudio.Decoder.load_for_whisper/1` decodes and resamples any WAV
-file to that.
+inaugural address. Nothing here converts sample rates, so the audio has to
+be 16 kHz; this file is.
 
 ```elixir
 sample = Application.app_dir(:nerves_livebook_fp3, "priv/audio/jfk.wav")
-pcm = InferAudio.Decoder.load_for_whisper(sample)
 IO.puts("Transcribing...")
-InferLLM.Whisper.transcribe(whisper, pcm)
+{:ok, %{text: text, segments: segments}} = NervesAI.STT.transcribe(NervesAI.STT, {:wav, sample})
+
+IO.puts(text)
+Kino.DataTable.new(segments)
 ```
 
 ### Transcribe yourself
 
 Records 5 seconds from the phone's main microphone. Speak (in English)
-while it runs. The microphone needs a system image whose kernel drives
-the WCD9335 audio codec; without it, `arecord` fails here.
+while it runs. The microphone needs a system image whose kernel drives the
+WCD9335 audio codec; without it, `arecord` fails here.
+
+The recording is asked for at 16 kHz mono, and ALSA's `plughw` device
+converts from the microphone's rate. **This has not been tested on the
+device.** If `arecord` rejects `-r 16000`, record at 48 kHz as the audio
+notebook (10) does; `NervesAI.STT.transcribe/3` then answers
+`{:error, {:unsupported_rate, 48000}}` and the recording needs a resampling
+step first.
 
 ```elixir
-amixer = fn name, value -> System.cmd("amixer", ["-c0", "cset", "name=#{name}", value]) end
-amixer.("MultiMedia2 Mixer SLIMBUS_0_TX", "1")
-amixer.("SLIM TX7 MUX", "DEC7")
-amixer.("ADC MUX7", "DMIC")
-amixer.("DMIC MUX7", "DMIC1")
-amixer.("AIF1_CAP Mixer SLIM TX7", "1")
+microphone = [
+  {"MultiMedia2 Mixer SLIMBUS_0_TX", :on},
+  {"SLIM TX7 MUX", "DEC7"},
+  {"ADC MUX7", "DMIC"},
+  {"DMIC MUX7", "DMIC1"},
+  {"AIF1_CAP Mixer SLIM TX7", :on}
+]
+
+for {name, value} <- microphone, do: {name, ExAudio.cset(name, value)}
 
 arecord = fn seconds, path ->
-  System.cmd("arecord", ~w(-D hw:0,1 -f S16_LE -r 48000 -c 1 -d #{seconds} #{path}),
+  System.cmd("arecord", ~w(-D plughw:0,1 -f S16_LE -r 16000 -c 1 -d #{seconds} #{path}),
     stderr_to_stdout: true
   )
 end
@@ -337,71 +342,102 @@ end
 # The first capture after boot returns silence; a short one wakes the path up.
 arecord.(1, "/tmp/warmup.wav")
 IO.puts("Recording for 5 seconds: speak now!")
-arecord.(5, "/tmp/me.wav")
-IO.puts("Transcribing...")
+{output, status} = arecord.(5, "/tmp/me.wav")
+if status != 0, do: IO.puts(output)
 
-InferLLM.Whisper.transcribe(whisper, InferAudio.Decoder.load_for_whisper("/tmp/me.wav"))
+IO.puts("Transcribing...")
+NervesAI.STT.transcribe(NervesAI.STT, {:wav, "/tmp/me.wav"})
 ```
 
 ## Chat with a language model (TinyLlama)
 
 **TinyLlama 1.1B Chat** is a small language model: about 670 MB, the
-biggest step. On a Fairphone 3 it writes about 4.7 tokens per second, so
-the answer is shown as it's written.
+biggest step. `NervesAI.LLM.LlamaCpp` runs it with llama.cpp. The model
+file carries its own chat template, so you pass the conversation as a list
+of messages and the library formats the prompt the way TinyLlama was
+trained.
 
 ```elixir
-model_path =
-  fetch_model.(:tinyllama,
-    source: {:hf, "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"},
-    path: "/data/models/tinyllama.gguf",
-    sha256: "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0"
-  )
+llm_path = fetch.(:tinyllama, catalog.tinyllama)
 
-tokenizer_path =
-  fetch_model.(:tinyllama_tokenizer,
-    source: {:hf, "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "tokenizer.json"},
-    path: "/data/models/tinyllama-tokenizer.json",
-    sha256: "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e"
-  )
-```
-
-### Load the model
-
-Takes a few seconds.
-
-```elixir
-{:ok, model} = ArmAI.LlamaCandle.load(model_path, tokenizer: tokenizer_path)
+start.(NervesAI.LLM.LlamaCpp,
+  adapter: NervesAI.LLM.LlamaCpp,
+  path: llm_path,
+  n_ctx: 1024
+)
 ```
 
 ### Ask a question
 
-Change `question` and run the cell again.
+Change `question` and run the cell again. The answer is printed piece by
+piece as the model writes it. `max_tokens` caps its length.
 
 ```elixir
 question = "What three things should I see in Brussels?"
 
-prompt = """
-<|system|>
-You are a helpful, concise travel guide.</s>
-<|user|>
-#{question}</s>
-<|assistant|>
-"""
+messages = [
+  %{role: "system", content: "You are a helpful, concise travel guide."},
+  %{role: "user", content: question}
+]
 
-# The answer appears as the model writes it, piece by piece.
-for piece <- ArmAI.LlamaCandle.stream(model, prompt: prompt, max_new: 128, stop_tokens: [2]) do
-  IO.write(piece)
-end
+started = System.monotonic_time(:millisecond)
 
-:done
+pieces =
+  NervesAI.LLM.stream_chat(NervesAI.LLM, messages, max_tokens: 128, temp: 0.7)
+  |> Enum.reduce(0, fn
+    text, count when is_binary(text) ->
+      IO.write(text)
+      count + 1
+
+    {:error, reason}, count ->
+      IO.puts("\n[generation failed: #{inspect(reason)}]")
+      count
+  end)
+
+seconds = (System.monotonic_time(:millisecond) - started) / 1000
+IO.puts("\n\n#{pieces} pieces in #{Float.round(seconds, 1)} s")
 ```
 
-`ArmAI.LlamaCandle.generate/2` takes the same options and returns the
-whole answer at once, with timing statistics (tokens per second).
+`NervesAI.LLM.chat/3` takes the same arguments and returns the whole answer
+at once.
 
-`stop_tokens: [2]` ends the answer at TinyLlama's end-of-text token, and
-`max_new` caps its length. The `<|system|>`, `<|user|>` and
-`<|assistant|>` lines are the chat format TinyLlama was trained on.
+## Sound, generated
+
+The audio notebook (10) plays tones. `NervesAI.Audio.WAV` writes and reads
+the WAV files: samples are plain floats between -1.0 and 1.0.
+
+```elixir
+rate = 48_000
+volume = 0.1
+notes = [262, 294, 330, 349, 392, 440, 494, 523]
+
+melody =
+  for freq <- notes, n <- 0..(div(rate, 4) - 1) do
+    volume * :math.sin(2 * :math.pi() * freq * n / rate)
+  end
+
+:ok = NervesAI.Audio.WAV.write("/tmp/melody.wav", melody, rate: rate)
+System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/melody.wav"], stderr_to_stdout: true)
+```
+
+### How loud was it?
+
+`NervesAI.Audio.WAV.read/1` returns the samples of any WAV file as mono
+floats. The recording from the speech step is split into tenths of a
+second, and each bar shows the loudest sample in that slice.
+
+```elixir
+{:ok, %{rate: rate, pcm_f32: pcm}} = NervesAI.Audio.WAV.read("/tmp/me.wav")
+
+for(<<s::float-32-little <- pcm>>, do: abs(s))
+|> Enum.chunk_every(div(rate, 10))
+|> Enum.map(fn slice ->
+  peak = Enum.max(slice)
+  String.duplicate("█", round(peak * 50)) <> " #{Float.round(peak, 2)}"
+end)
+|> Enum.join("\n")
+|> IO.puts()
+```
 
 ## Already on this phone
 

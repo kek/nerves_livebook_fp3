@@ -52,13 +52,9 @@ with `aplay`.
 rate = 48_000
 volume = 0.1
 
-tone =
-  Nx.iota({rate}, type: :f32)
-  |> Nx.multiply(2 * :math.pi() * 440 / rate)
-  |> Nx.sin()
-  |> Nx.multiply(volume)
+tone = for n <- 0..(rate - 1), do: volume * :math.sin(2 * :math.pi() * 440 * n / rate)
 
-InferAudio.Decoder.write_wav("/tmp/tone.wav", tone, sample_rate: rate)
+NervesAI.Audio.WAV.write("/tmp/tone.wav", tone, rate: rate)
 System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/tone.wav"], stderr_to_stdout: true)
 ```
 
@@ -70,15 +66,11 @@ Change `volume` (0.0 to 1.0) and run it again.
 notes = [262, 294, 330, 349, 392, 440, 494, 523]
 
 melody =
-  for freq <- notes do
-    Nx.iota({div(rate, 4)}, type: :f32)
-    |> Nx.multiply(2 * :math.pi() * freq / rate)
-    |> Nx.sin()
-    |> Nx.multiply(volume)
+  for freq <- notes, n <- 0..(div(rate, 4) - 1) do
+    volume * :math.sin(2 * :math.pi() * freq * n / rate)
   end
-  |> Nx.concatenate()
 
-InferAudio.Decoder.write_wav("/tmp/melody.wav", melody, sample_rate: rate)
+NervesAI.Audio.WAV.write("/tmp/melody.wav", melody, rate: rate)
 System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/melody.wav"], stderr_to_stdout: true)
 ```
 
@@ -157,12 +149,10 @@ The recording is split into tenths of a second, and each bar shows the
 loudest sample in that slice.
 
 ```elixir
-{:ok, %{samples: samples}} = InferAudio.Decoder.decode_file("/tmp/me.wav")
+{:ok, %{rate: rate, pcm_f32: pcm}} = NervesAI.Audio.WAV.read("/tmp/me.wav")
 
-samples
-|> Nx.abs()
-|> Nx.to_flat_list()
-|> Enum.chunk_every(4_800)
+for(<<sample::float-32-little <- pcm>>, do: abs(sample))
+|> Enum.chunk_every(div(rate, 10))
 |> Enum.map(fn slice ->
   peak = Enum.max(slice)
   String.duplicate("█", round(peak * 50)) <> " #{Float.round(peak, 2)}"

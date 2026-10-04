@@ -10,6 +10,28 @@ defmodule NervesLivebookFP3.MixProject do
   # Scenic renders with Cairo straight to the framebuffer on the phone.
   if Mix.target() != :host, do: System.put_env("SCENIC_LOCAL_TARGET", "cairo-fb")
 
+  # Native AI libraries for the Fairphone 3's ARMv8.0 cores (neither cluster
+  # has dotprod or fp16; a native or ARMv8.2 build dies with SIGILL):
+  # llama.cpp and whisper.cpp are built from source for plain armv8-a, and
+  # the precompiled whisper_cpp artifact (ARMv8.2) is never used.
+  if Mix.target() != :host do
+    for {key, value} <- [
+          {"LLAMA_BACKEND", "cpu"},
+          {"LLAMA_CPU_ARM_ARCH", "armv8-a"},
+          {"WHISPER_CPP_BUILD", "1"},
+          {"GGML_NATIVE", "OFF"},
+          {"GGML_CPU_ARM_ARCH", "armv8-a"},
+          # Rust NIFs (whisper_cpp, cpu_governor) cross-compile with the Nerves
+          # toolchain, which is on PATH while dependencies compile. whisper-rs-sys
+          # uses its bundled bindings instead of generating them with libclang.
+          {"CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu"},
+          {"CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "aarch64-nerves-linux-gnu-gcc"},
+          {"WHISPER_DONT_GENERATE_BINDINGS", "1"}
+        ] do
+      System.put_env(key, value)
+    end
+  end
+
   def project do
     [
       app: @app,
@@ -46,8 +68,8 @@ defmodule NervesLivebookFP3.MixProject do
         :fp3_modem,
         :ex_nfc,
         :ex_location,
-        # The AI stack: this pulls arm_ai, nx_arm, infer_*, nerves_model_hub,
-        # cpu_governor, nerves_data_resize via nerves_ai's mix.exs.
+        # Runs the Fairphone 3 profile at boot: thread pinning and the
+        # first-boot data partition grow.
         :nerves_ai
       ]
     ]
@@ -84,9 +106,18 @@ defmodule NervesLivebookFP3.MixProject do
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
       # ---------------- AI stack ----------------
-      # nerves_ai pulls arm_ai (whose NIF builds from source with Rust),
-      # nx_arm, the infer_* libraries and the boot helpers.
-      {:nerves_ai, github: "mlainez/nerves_ai", override: true},
+      # nerves_ai composes the stack and the Fairphone 3 profile places work
+      # on the fast cluster. The capability packages are built for the phone
+      # only.
+      sibling(:nerves_ai, "NERVES_AI_PATH"),
+      sibling(:nerves_ai_fp3, "NERVES_AI_FP3_PATH"),
+      sibling(:cpu_governor, "CPU_GOVERNOR_PATH"),
+      sibling(:nerves_data_resize, "NERVES_DATA_RESIZE_PATH"),
+      {:llama_cpp_ex, "~> 0.8", targets: :nerves_system_fp3},
+      {:whisper_cpp, "~> 0.5", targets: :nerves_system_fp3},
+      {:evision, "~> 1.0.1-rc.0", targets: :nerves_system_fp3},
+      # Builds whisper_cpp from source and cpu_governor's NIF from its crate.
+      {:rustler, "~> 0.38.0", runtime: false},
 
       # ---------------- FP3 hardware userspace ----------------
       {:ex_rmtfs, github: "mlainez/ex_rmtfs"},
@@ -111,6 +142,15 @@ defmodule NervesLivebookFP3.MixProject do
        runtime: false,
        targets: :nerves_system_fp3}
     ]
+  end
+
+  # A sibling comes from a local checkout when its *_PATH variable is set,
+  # from GitHub otherwise.
+  defp sibling(app, env) do
+    case System.get_env(env) do
+      path when path in [nil, ""] -> {app, github: "mlainez/#{app}", override: true}
+      path -> {app, path: path, override: true}
+    end
   end
 
   def release do
