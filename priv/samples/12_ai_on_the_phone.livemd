@@ -134,18 +134,16 @@ such as model inference.
 
 ## Tensors on the BEAM
 
-[Nx](https://hexdocs.pm/nx) is Elixir's tensor library. The default
-`Nx.BinaryBackend` is written in plain Elixir: portable, and slow. The
-models in this notebook don't use it, but evision brings Nx along and image
-code in Elixir would. Here is what a 640×640 RGB `u8` image costs on this
-phone for the steps a YOLO pre-processing needs (milliseconds, best of
-three). Your notebook process runs on a normal scheduler, so on the Silver
-cores.
+[Nx](https://hexdocs.pm/nx) is Elixir's tensor library. Its default
+`Nx.BinaryBackend` is written in plain Elixir: portable, and very slow on a
+phone. This firmware sets [`NxEigen.Backend`](https://hexdocs.pm/nx_eigen) as
+the default (`config :nx, default_backend: NxEigen.Backend`): the Eigen C++
+library with NEON, built for this CPU. Here is what a 640×640 RGB `u8` image
+costs on each backend for the steps a YOLO pre-processing needs, plus a
+512×512 matrix product (milliseconds, best of three). Your notebook process
+runs on a normal scheduler, so on the Silver cores.
 
 ```elixir
-img = Nx.broadcast(Nx.u8(128), {640, 640, 3})
-floats = Nx.as_type(img, :f32)
-
 best_ms = fn fun ->
   1..3
   |> Enum.map(fn _ ->
@@ -156,16 +154,30 @@ best_ms = fn fun ->
   |> Float.round(1)
 end
 
+bench = fn backend ->
+  img = Nx.broadcast(Nx.u8(128), {640, 640, 3}) |> Nx.backend_copy(backend)
+  floats = Nx.as_type(img, :f32)
+  a = Nx.iota({128, 128}, type: :f32, backend: backend)
+
+  %{
+    pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
+    transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
+    as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
+    divide_255: best_ms.(fn -> Nx.divide(floats, 255) end),
+    dot_128: best_ms.(fn -> Nx.dot(a, a) end)
+  }
+end
+
 %{
-  pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
-  transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
-  as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
-  divide_255: best_ms.(fn -> Nx.divide(floats, 255) end)
+  eigen: bench.(NxEigen.Backend),
+  binary: bench.(Nx.BinaryBackend)
 }
 ```
 
-That is why the object detector below does its image work in OpenCV rather
-than in Nx.
+The object detector below does its image work in OpenCV, which has its own
+NEON code; Nx is there for your own tensor code and for libraries such as
+`nx_image` and `nx_signal`. (The binary backend's `dot_128` is already slow;
+a 512×512 product takes it about a minute on a fast desktop.)
 
 ## Models: downloaded when you need them
 

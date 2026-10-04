@@ -26,7 +26,9 @@ defmodule NervesLivebookFP3.MixProject do
           # uses its bundled bindings instead of generating them with libclang.
           {"CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu"},
           {"CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "aarch64-nerves-linux-gnu-gcc"},
-          {"WHISPER_DONT_GENERATE_BINDINGS", "1"}
+          {"WHISPER_DONT_GENERATE_BINDINGS", "1"},
+          # nx_eigen uses Eigen's own FFT, so the target needs no FFTW library.
+          {"NX_EIGEN_FFT_LIB", "eigen"}
         ] do
       System.put_env(key, value)
     end
@@ -116,6 +118,12 @@ defmodule NervesLivebookFP3.MixProject do
       {:llama_cpp_ex, "~> 0.8", targets: :nerves_system_fp3},
       {:whisper_cpp, "~> 0.5", targets: :nerves_system_fp3},
       {:evision, "~> 1.0.1-rc.0", targets: :nerves_system_fp3},
+      # Fast Nx on the phone (Eigen with NEON). evision declares `nx ~> 0.12.1`
+      # but works with Nx 1.0; nx_eigen needs Nx 1.0.
+      {:nx, "~> 1.0", override: true},
+      # `env: :dev` makes nx_eigen build from source with the Nerves toolchain:
+      # its precompiled aarch64 NIF links FFTW, which the system image lacks.
+      {:nx_eigen, "~> 0.2", targets: :nerves_system_fp3, env: :dev},
       # Builds whisper_cpp from source and cpu_governor's NIF from its crate.
       {:rustler, "~> 0.38.0", runtime: false},
 
