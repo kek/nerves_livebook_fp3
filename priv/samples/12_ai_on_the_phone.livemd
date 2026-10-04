@@ -21,12 +21,10 @@ The AI stack has three kinds of parts:
 * **`nerves_ai`** is the composer. It puts one small facade in front of each
   capability (`NervesAI.LLM`, `NervesAI.STT`, `NervesAI.Vision`), downloads
   model files with checksums (`NervesAI.Models`), reads and writes WAV files
-  (`NervesAI.Audio.WAV`) and runs every call in a "burst" that holds the CPU
-  at full speed.
-* **`cpu_governor`** provides the CPU topology, frequency control and thread
-  pinning. At boot `nerves_ai` uses it to pin the VM's threads that run
-  native code to the fast cluster and to tell the engines to use four
-  threads. **`nerves_data_resize`** grows the data partition on first boot
+  (`NervesAI.Audio.WAV`).
+* **`cpu_governor`** provides the CPU topology and thread pinning. At boot
+  `nerves_ai` uses it to pin the VM's threads that run native code to the
+  fast cluster and to tell the engines to use four threads. **`nerves_data_resize`** grows the data partition on first boot
   so models fit.
 
 Nothing is configured to start at boot. This notebook downloads each model
@@ -42,13 +40,6 @@ plain ARMv8.0. `cpu_governor` reads the layout from `/sys`:
 
 ```elixir
 CpuGovernor.topology()
-```
-
-What can this user change on this phone? Frequency control, temperature
-readings and thread pinning:
-
-```elixir
-CpuGovernor.capabilities()
 ```
 
 ### Where the VM's threads run
@@ -74,63 +65,14 @@ end
 %{expected: gold, outside: length(report.outside)}
 ```
 
-### Does the performance burst help?
+### Does running the CPU at full speed help?
 
-`CpuGovernor.with_performance/1` holds the Gold cluster at full speed for
-the duration of a function and restores the previous setting afterwards.
-The `nerves_ai` facades do this around every model call.
-
-The work here is a SHA-256 over 64 MB: the crypto NIF runs large inputs on a
-dirty scheduler, which nerves_ai pinned to the Gold cores.
-
-Two things would skew a naive comparison, so the cell avoids them: the first
-runs after idle are slow while the clock ramps up (two warm-up rounds), and
-acquiring a lease has a cost of its own (a few milliseconds once the layout
-is cached; the first call also detects the topology). The table therefore
-times the work *inside* the lease, alternates the two variants, and reports
-the lease cost separately. All values are milliseconds.
-
-```elixir
-data = :crypto.strong_rand_bytes(64_000_000)
-
-time_ms = fn fun ->
-  {us, result} = :timer.tc(fun)
-  {Float.round(us / 1000, 1), result}
-end
-
-work = fn -> :crypto.hash(:sha256, data) end
-
-# warm-up: ramp the clock and populate the lease server's layout cache
-for _ <- 1..2 do
-  work.()
-  CpuGovernor.with_performance(fn -> :ok end)
-end
-
-{lease_ms, _} = time_ms.(fn -> CpuGovernor.with_performance(fn -> :ok end) end)
-
-rounds =
-  for _ <- 1..5 do
-    {plain, _} = time_ms.(work)
-    {inside, _} = CpuGovernor.with_performance(fn -> time_ms.(work) end)
-    {plain, inside}
-  end
-
-median = fn values -> values |> Enum.sort() |> Enum.at(div(length(values), 2)) end
-
-%{
-  lease_overhead_ms: lease_ms,
-  plain_ms: Enum.map(rounds, &elem(&1, 0)),
-  inside_lease_ms: Enum.map(rounds, &elem(&1, 1)),
-  median_plain: median.(Enum.map(rounds, &elem(&1, 0))),
-  median_inside_lease: median.(Enum.map(rounds, &elem(&1, 1)))
-}
-```
-
-If the two rows match, the cores were already at full speed during the plain
-runs (the schedutil governor ramps within tens of milliseconds, so bursts
-shorter than that gain little) or `/sys` is read-only (see `capabilities/0`
-above). A lease pays off for bursts of a few hundred milliseconds and longer,
-such as model inference.
+No. A "run fast" lease that held the Gold cluster at full speed (frequency
+clamp, governor switch) was measured around a 64 MB SHA-256, the vision model
+and the LLM on this phone: no measurable gain, because `schedutil` ramps the
+clock within milliseconds. What matters is thread placement on the Gold
+cores. The process-level proof is the busy time per CPU: while a model runs,
+the busy time accumulated on `cpu4-7` grows much faster than on `cpu0-3`.
 
 ## Tensors on the BEAM
 

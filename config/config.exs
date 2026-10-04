@@ -92,8 +92,6 @@ config :nerves_livebook_fp3, notebooks_dest: "/data/livebook/notebooks"
 # At boot nerves_ai pins the VM's dirty schedulers to the fast cluster and
 # runs the first-boot partition grow (configured below). No models are
 # configured: the AI notebook fetches its models when the phone is online.
-# The full-speed lease taken around inference is revoked at 80 degC.
-config :nerves_ai, burst: [thermal_limit_c: 80]
 
 # Scenic's asset library (fonts); see lib/nerves_livebook_fp3/assets.ex.
 config :scenic, :assets, module: NervesLivebookFP3.Assets

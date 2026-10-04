@@ -126,7 +126,7 @@ mix upload
 nerves_livebook_fp3
 ├── nerves_system_fp3   kernel, bootloader glue, daemons (rmtfs, qbootctl, …)
 ├── nerves_ai           the AI composer: LLM / STT / Vision facades, model downloads, WAV
-│   ├── cpu_governor    topology, performance bursts, thread affinity (Rust NIF)
+│   ├── cpu_governor    topology, thread affinity (Rust NIF)
 │   └── nerves_data_resize  first-boot F2FS grow
 ├── llama_cpp_ex        LLM engine (llama.cpp)
 ├── whisper_cpp         speech to text engine (whisper.cpp, Silero VAD)
