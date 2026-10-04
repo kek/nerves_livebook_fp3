@@ -154,18 +154,23 @@ best_ms = fn fun ->
   |> Float.round(1)
 end
 
+# Constants such as the pad value are created on the default backend, and
+# Nx cannot mix backends in one operation, so each variant runs with its own
+# backend as the default.
 bench = fn backend ->
-  img = Nx.broadcast(Nx.u8(128), {640, 640, 3}) |> Nx.backend_copy(backend)
-  floats = Nx.as_type(img, :f32)
-  a = Nx.iota({128, 128}, type: :f32, backend: backend)
+  Nx.with_default_backend(backend, fn ->
+    img = Nx.broadcast(Nx.u8(128), {640, 640, 3})
+    floats = Nx.as_type(img, :f32)
+    a = Nx.iota({128, 128}, type: :f32)
 
-  %{
-    pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
-    transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
-    as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
-    divide_255: best_ms.(fn -> Nx.divide(floats, 255) end),
-    dot_128: best_ms.(fn -> Nx.dot(a, a) end)
-  }
+    %{
+      pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
+      transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
+      as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
+      divide_255: best_ms.(fn -> Nx.divide(floats, 255) end),
+      dot_128: best_ms.(fn -> Nx.dot(a, a) end)
+    }
+  end)
 end
 
 %{
