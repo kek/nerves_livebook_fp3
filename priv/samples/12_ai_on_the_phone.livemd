@@ -81,28 +81,56 @@ the duration of a function and restores the previous setting afterwards.
 The `nerves_ai` facades do this around every model call.
 
 The work here is a SHA-256 over 64 MB: the crypto NIF runs large inputs on a
-dirty scheduler, which the profile pinned to the Gold cores. Each variant
-runs three times; the table shows milliseconds.
+dirty scheduler, which the profile pinned to the Gold cores.
+
+Two things would skew a naive comparison, so the cell avoids them: the first
+runs after idle are slow while the clock ramps up (two warm-up rounds), and
+acquiring a lease has a cost of its own (a few milliseconds once the layout
+is cached; the first call also detects the topology). The table therefore
+times the work *inside* the lease, alternates the two variants, and reports
+the lease cost separately. All values are milliseconds.
 
 ```elixir
 data = :crypto.strong_rand_bytes(64_000_000)
 
 time_ms = fn fun ->
-  {us, _} = :timer.tc(fun)
-  Float.round(us / 1000, 1)
+  {us, result} = :timer.tc(fun)
+  {Float.round(us / 1000, 1), result}
 end
 
 work = fn -> :crypto.hash(:sha256, data) end
 
+# warm-up: ramp the clock and populate the lease server's layout cache
+for _ <- 1..2 do
+  work.()
+  CpuGovernor.with_performance(fn -> :ok end)
+end
+
+{lease_ms, _} = time_ms.(fn -> CpuGovernor.with_performance(fn -> :ok end) end)
+
+rounds =
+  for _ <- 1..5 do
+    {plain, _} = time_ms.(work)
+    {inside, _} = CpuGovernor.with_performance(fn -> time_ms.(work) end)
+    {plain, inside}
+  end
+
+median = fn values -> values |> Enum.sort() |> Enum.at(div(length(values), 2)) end
+
 %{
-  plain_ms: for(_ <- 1..3, do: time_ms.(work)),
-  with_performance_ms:
-    for(_ <- 1..3, do: time_ms.(fn -> CpuGovernor.with_performance(work) end))
+  lease_overhead_ms: lease_ms,
+  plain_ms: Enum.map(rounds, &elem(&1, 0)),
+  inside_lease_ms: Enum.map(rounds, &elem(&1, 1)),
+  median_plain: median.(Enum.map(rounds, &elem(&1, 0))),
+  median_inside_lease: median.(Enum.map(rounds, &elem(&1, 1)))
 }
 ```
 
-If both rows match, the cores were already at full speed (or `/sys` is
-read-only, see `capabilities/0` above) and the burst changes nothing.
+If the two rows match, the cores were already at full speed during the plain
+runs (the schedutil governor ramps within tens of milliseconds, so bursts
+shorter than that gain little) or `/sys` is read-only (see `capabilities/0`
+above). A lease pays off for bursts of a few hundred milliseconds and longer,
+such as model inference.
 
 ## Tensors on the BEAM
 
