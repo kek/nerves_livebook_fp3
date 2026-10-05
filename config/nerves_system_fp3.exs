@@ -83,7 +83,10 @@ wifi = [
 config :vintage_net,
   regulatory_domain: "BE",
   power_managers:
-    if(apn, do: [{Fp3Modem.PowerManager, [ifname: "rmnet0", watchdog_timeout: 120_000]}], else: []),
+    if(apn,
+      do: [{Fp3Modem.PowerManager, [ifname: "rmnet0", watchdog_timeout: 120_000]}],
+      else: []
+    ),
   config:
     [
       {"usb0", %{type: VintageNetDirect}},

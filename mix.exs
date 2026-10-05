@@ -69,7 +69,15 @@ defmodule NervesLivebookFP3.MixProject do
 
       # ---------------- Livebook ----------------
       {:livebook, "~> 0.19"},
-      {:plug, "~> 1.16"},
+
+      # Livebook 0.19.10 pins exact versions with security advisories.
+      # Override to the fixed releases until Livebook ships them.
+      {:bandit, "~> 1.12.5", override: true},
+      {:phoenix, "~> 1.8.9", override: true},
+      {:phoenix_live_view, "~> 1.1.33", override: true},
+      {:plug, "~> 1.19.5", override: true},
+      {:protobuf, "~> 0.16.1", override: true},
+      {:req, "~> 0.6.1", override: true},
 
       # ---------------- Kino (used by the notebooks) ----------------
       {:kino, "~> 0.14"},
