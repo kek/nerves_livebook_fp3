@@ -34,6 +34,7 @@ edge-AI stack and the Fairphone 3 hardware libraries loaded.
 | `10_audio.livemd` | Loudspeaker, earpiece and microphone: tones, recording, playback |
 | `11_screen_touch_buttons.livemd` | Draw on the screen, touch input, volume and power buttons |
 | `12_ai_on_the_phone.livemd` | The AI stack, then a ladder: Nx tensors and NEON speed, YOLO object detection, Whisper speech to text, TinyLlama chat |
+| `13_emerge_and_solve.livemd` | A GPU-rendered touch UI with Emerge, state kept in Solve controllers |
 
 Notebooks ship in `priv/samples` and are copied to
 `/data/livebook/notebooks` at boot, then starred so they appear on

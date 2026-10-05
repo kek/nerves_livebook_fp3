@@ -83,6 +83,11 @@ defmodule NervesLivebookFP3.MixProject do
       {:scenic_driver_local,
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
+      # Emerge UI on the screen (DRM + OpenGL ES through Mesa freedreno),
+      # with Solve for state. The native renderer is a precompiled NIF.
+      {:emerge, "~> 0.4.0"},
+      {:solve, "~> 0.3.0"},
+
       # ---------------- AI stack ----------------
       # nerves_ai pulls arm_ai (whose NIF builds from source with Rust),
       # nx_arm, the infer_* libraries and the boot helpers.

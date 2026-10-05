@@ -1,0 +1,286 @@
+# Emerge and Solve on the screen
+
+## Overview
+
+[Emerge](https://hexdocs.pm/emerge) is an Elixir UI library in the style
+of elm-ui: the UI is a tree of `el`, `row` and `column` built by plain
+functions. It draws with Skia and OpenGL ES straight on the phone's DRM
+display, using the Adreno GPU through Mesa.
+
+[Solve](https://hexdocs.pm/solve) keeps application state outside the
+UI. Controllers own the state and handle events; the view subscribes to
+what they expose and rerenders when it changes.
+
+Only one UI can own the screen at a time, so stop any Scenic viewport
+from notebook 11 first.
+
+## Free the screen
+
+The IEx console is drawn on the screen too. Detach it while Emerge runs:
+
+```elixir
+fbcon =
+  Path.wildcard("/sys/class/vtconsole/vtcon*")
+  |> Enum.find(&(File.read!(Path.join(&1, "name")) =~ "frame buffer"))
+
+File.write!(Path.join(fbcon, "bind"), "0")
+```
+
+## Find the display
+
+The screen is driven by the `msm` DRM driver. Its card number depends on
+probe order, so look it up:
+
+```elixir
+drm_card =
+  Path.wildcard("/sys/class/drm/card?")
+  |> Enum.find(fn card ->
+    card |> Path.join("device/driver") |> File.read_link!() |> Path.basename() =~ "msm"
+  end)
+  |> then(&("/dev/dri/" <> Path.basename(&1)))
+
+{:ok, outputs} = EmergeSkia.drm_outputs(drm_card: drm_card)
+{drm_card, outputs}
+```
+
+## State with Solve
+
+A controller owns one slice of state and the events that change it. An
+app runs the controllers.
+
+```elixir
+defmodule Demo.Counter do
+  use Solve.Controller, events: [:increment, :decrement]
+
+  @impl true
+  def init(_params, _dependencies), do: %{count: 0}
+
+  def increment(_payload, state), do: %{state | count: state.count + 1}
+  def decrement(_payload, state), do: %{state | count: state.count - 1}
+end
+
+defmodule Demo.State do
+  use Solve
+
+  @impl Solve
+  def controllers, do: [controller!(name: :counter, module: Demo.Counter)]
+end
+
+{:ok, app} = Demo.State.start_link(name: Demo.State)
+```
+
+## The view
+
+`solve/2` reads the counter and subscribes to it. `event/2` turns a
+controller event into something a button can send. When the counter
+changes, `handle_solve_updated/2` rerenders.
+
+```elixir
+defmodule Demo.View do
+  use Emerge
+  use Solve.Lookup
+
+  @impl Viewport
+  # A notebook module belongs to no OTP application, so name the one whose
+  # priv/ Emerge should load assets from.
+  def mount(opts),
+    do: {:ok, Keyword.merge([backend: :drm, otp_app: :nerves_livebook_fp3], opts)}
+
+  @impl Viewport
+  def render() do
+    counter = solve(Demo.State, :counter)
+
+    column(
+      [
+        width(fill()),
+        height(fill()),
+        spacing(60),
+        Background.color(gradient([color(:indigo, 900), color(:sky, 800)], 180)),
+        Font.color(color(:white))
+      ],
+      [
+        el([center_x(), padding_xy(0, 200), Font.size(80)], text("Hello from Nerves!")),
+        el([center_x(), Font.size(200)], text("#{counter.count}")),
+        row([center_x(), spacing(60)], [
+          button("-", event(counter, :decrement)),
+          button("+", event(counter, :increment))
+        ])
+      ]
+    )
+  end
+
+  defp button(label, on_press) do
+    Input.button(
+      [
+        width(px(260)),
+        height(px(260)),
+        Border.rounded(130),
+        Background.color(color(:slate, 800)),
+        Font.size(120),
+        Font.center(),
+        Event.on_press(on_press)
+      ],
+      el([center_x(), center_y()], text(label))
+    )
+  end
+
+  @impl Solve.Lookup
+  def handle_solve_updated(_updated, state), do: {:ok, Viewport.rerender(state)}
+end
+```
+
+## Show it
+
+```elixir
+{:ok, viewport} = Demo.View.start_link(drm_card: drm_card)
+```
+
+Tap the buttons. The count lives in `Demo.State`, not in the view, so
+anything else can change it too and the screen follows:
+
+```elixir
+Solve.dispatch(Demo.State, :counter, :increment, nil)
+```
+
+## A GPU showcase
+
+Everything below is drawn by the Adreno GPU every frame: a background
+gradient that shifts colour, glowing orbs orbiting the centre, and a
+spinning, pulsing card with a soft shadow. Animations are declared as
+keyframes; the renderer interpolates them without calling back into
+Elixir. Tap the card to add orbs.
+
+```elixir
+defmodule Demo.Showcase do
+  use Emerge
+  alias Emerge.UI.{Animation, Nearby, Transform}
+
+  @hues [:sky, :fuchsia, :lime, :amber, :rose, :violet, :emerald, :cyan]
+
+  @impl Viewport
+  def mount(opts) do
+    {:ok, %{orbs: 8},
+     Keyword.merge(
+       [backend: :drm, otp_app: :nerves_livebook_fp3, renderer_stats_log: true],
+       opts
+     )}
+  end
+
+  @impl Viewport
+  def render(%{orbs: orbs}) do
+    el(
+      [width(fill()), height(fill()), background()] ++
+        Enum.map(0..(orbs - 1), &Nearby.in_front(orb(&1, orbs))),
+      el([center_x(), center_y()], card(orbs))
+    )
+  end
+
+  # Three gradients, cycled in a loop. Keyframes need the same number of stops.
+  defp background do
+    Animation.animate(
+      [
+        [Background.color(gradient([color(:indigo, 950), color(:violet, 800), color(:sky, 900)], 160))],
+        [Background.color(gradient([color(:slate, 950), color(:fuchsia, 800), color(:indigo, 900)], 200))],
+        [Background.color(gradient([color(:indigo, 950), color(:violet, 800), color(:sky, 900)], 160))]
+      ],
+      8000,
+      :ease_in_out,
+      :loop
+    )
+  end
+
+  # An orb on a circular orbit around the centre. Each gets its own radius,
+  # speed, size and starting angle, and pulses as it goes.
+  defp orb(i, count) do
+    hue = Enum.at(@hues, rem(i, length(@hues)))
+    size = 60 + rem(i * 37, 70)
+    radius = 250 + rem(i * 53, 250)
+    phase = 2 * :math.pi() * i / count
+    period = 4000 + rem(i * 911, 5000)
+
+    orbit =
+      for step <- 0..24 do
+        a = phase + 2 * :math.pi() * step / 24
+        [Transform.move_x(radius * :math.cos(a)), Transform.move_y(radius * 1.6 * :math.sin(a))]
+      end
+
+    el(
+      [
+        center_x(),
+        center_y(),
+        Animation.animate(orbit, period, :linear, :loop)
+      ],
+      el(
+        [
+          width(px(size)),
+          height(px(size)),
+          Border.rounded(size / 2),
+          Background.color(gradient([color(hue, 200), color(hue, 600)], 135)),
+          Border.glow(color(hue, 400), size / 2),
+          Animation.animate(
+            [[Transform.scale(0.7)], [Transform.scale(1.2)], [Transform.scale(0.7)]],
+            1500 + rem(i * 173, 1500),
+            :ease_in_out,
+            :loop
+          )
+        ],
+        none()
+      )
+    )
+  end
+
+  defp card(orbs) do
+    Input.button(
+      [
+        width(px(560)),
+        height(px(560)),
+        Border.rounded(80),
+        Border.width(4),
+        Border.color(color(:white)),
+        Background.color(gradient([color(:fuchsia, 500), color(:sky, 400)], 45)),
+        Border.shadow(offset: {0, 40}, blur: 80, color: color(:slate, 950)),
+        Font.color(color(:white)),
+        Event.on_press(:more),
+        Animation.animate(
+          [
+            [Transform.rotate(-8), Transform.scale(0.95)],
+            [Transform.rotate(8), Transform.scale(1.05)],
+            [Transform.rotate(-8), Transform.scale(0.95)]
+          ],
+          3000,
+          :ease_in_out,
+          :loop
+        )
+      ],
+      column([center_x(), center_y(), spacing(20)], [
+        el([center_x(), Font.size(160)], text("#{orbs}")),
+        el([center_x(), Font.size(48)], text("orbs · tap for more"))
+      ])
+    )
+  end
+
+  @impl Viewport
+  def handle_info(:more, state) do
+    {:noreply, Viewport.rerender(%{state | orbs: Kernel.min(state.orbs + 8, 96)})}
+  end
+end
+```
+
+Swap the counter for the showcase:
+
+```elixir
+GenServer.stop(viewport)
+{:ok, viewport} = Demo.Showcase.start_link(drm_card: drm_card)
+```
+
+`renderer_stats_log: true` logs frame timings every five seconds. Watch
+them in the phone's log (`RingLogger.next`) as you add orbs, to see how
+far the GPU goes before frames slow down.
+
+## Stop
+
+```elixir
+GenServer.stop(viewport)
+GenServer.stop(app)
+File.write!(Path.join(fbcon, "bind"), "1")
+```

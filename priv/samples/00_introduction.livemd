@@ -38,6 +38,7 @@ out |> String.split("\n") |> Enum.filter(&(&1 =~ "fp3-module-slots"))
 | Loudspeaker, earpiece, microphone | `ExAudio`, `aplay`, `arecord` | 10, 12 |
 | Screen, touchscreen, buttons | `Scenic`, `InputEvent` | 11 |
 | AI: Nx, object detection, speech to text, LLM chat | `nerves_ai` stack | 12 |
+| GPU-rendered UI with app state | `Emerge`, `Solve` | 13 |
 
 Not available yet: classic Bluetooth. The radio supports it, but this
 firmware drives Bluetooth with BlueHeron, which only speaks Bluetooth LE,

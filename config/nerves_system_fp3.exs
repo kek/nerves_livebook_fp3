@@ -6,6 +6,9 @@ config :shoehorn,
   init: [:nerves_runtime, :nerves_pack, :nerves_ai],
   app: Mix.Project.config()[:app]
 
+# Emerge draws with OpenGL ES on the MSM DRM device (Mesa freedreno).
+config :emerge, compiled_backends: [drm: [:opengl]]
+
 # Advance the system clock on devices without a real-time clock.
 config :nerves, :erlinit, update_clock: true
 
