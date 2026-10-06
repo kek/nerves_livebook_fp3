@@ -109,8 +109,8 @@ defmodule NervesLivebookFP3.MixProject do
       {:ex_audio, github: "mlainez/ex_audio", override: true},
       {:fp3_camera, github: "mlainez/fp3_camera", override: true},
       {:qmi, github: "mlainez/qmi", branch: "qrtr-transport", override: true},
-      # Forks with boot-race and power-off fixes, until
-      # mlainez/vintage_net_qmi#1 and mlainez/fp3_modem#1 are merged.
+      # Forks with fixes for two modem boot races and a power-off mode
+      # the modem can't leave without a reset.
       {:vintage_net_qmi, github: "kek/vintage_net_qmi", branch: "fix-boot-races", override: true},
       {:fp3_modem, github: "kek/fp3_modem", branch: "low-power-off", override: true},
       {:ex_nfc, github: "mlainez/ex_nfc", override: true},
