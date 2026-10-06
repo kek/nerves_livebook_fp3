@@ -109,9 +109,10 @@ defmodule NervesLivebookFP3.MixProject do
       {:ex_audio, github: "mlainez/ex_audio", override: true},
       {:fp3_camera, github: "mlainez/fp3_camera", override: true},
       {:qmi, github: "mlainez/qmi", branch: "qrtr-transport", override: true},
-      {:vintage_net_qmi,
-       github: "mlainez/vintage_net_qmi", branch: "qrtr-transport", override: true},
-      {:fp3_modem, github: "mlainez/fp3_modem", override: true},
+      # Forks with boot-race and power-off fixes, until
+      # mlainez/vintage_net_qmi#1 and mlainez/fp3_modem#1 are merged.
+      {:vintage_net_qmi, github: "kek/vintage_net_qmi", branch: "fix-boot-races", override: true},
+      {:fp3_modem, github: "kek/fp3_modem", branch: "low-power-off", override: true},
       {:ex_nfc, github: "mlainez/ex_nfc", override: true},
       {:ex_location, github: "mlainez/ex_location", override: true},
       {:blue_heron, github: "mlainez/blue_heron", targets: :nerves_system_fp3},

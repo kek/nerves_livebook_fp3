@@ -84,6 +84,8 @@ GitHub release (about 360 MB).
 Cellular data is off unless you pass the SIM's APN at build time, for
 example `FP3_APN=internet.be mix firmware`. That adds the modem's QMI
 interface and `Fp3Modem.PowerManager` to the network config.
+Simbase Blue SIMs (ICCID starting `89445`) need `FP3_APN=mobiledata`:
+the network rejects `simbase` with "user authentication failed".
 
 For a workshop venue, build with its Wi-Fi so every phone joins it on
 first boot: `FP3_WIFI_SSID=venue FP3_WIFI_PASSPHRASE=secret mix firmware`
