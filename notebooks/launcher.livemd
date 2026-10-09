@@ -1,0 +1,44 @@
+<!-- livebook:{"app_settings":{"access_type":"public","slug":"launcher"}} -->
+
+# Launcher
+
+## Overview
+
+A status screen with hostname, time, battery and IP addresses, refreshed
+every two seconds. **Screen off** dims the backlight and blacks out the
+screen; tap anywhere to wake. **Suspend**, or a short press on the power
+button, puts the whole phone to sleep; wake it with the power key, then
+tap once touch is back.
+
+The code is `NervesLivebookFP3.Launcher` in
+`lib/nerves_livebook_fp3/launcher.ex`. Edit it there and load it into the
+running phone with `scripts/hot-load.sh`.
+
+This notebook also runs as a Livebook app (`scripts/push-launcher.sh --app`),
+which evaluates every cell at boot.
+
+## Start
+
+```elixir
+{:ok, _} = NervesLivebookFP3.Launcher.start()
+```
+
+## Check power support
+
+Suspend needs `mem` in the first list. The second shows which kind of
+suspend `mem` means; the one in brackets is used.
+
+```elixir
+{File.read!("/sys/power/state"), File.read!("/sys/power/mem_sleep"), File.ls("/sys/class/backlight")}
+```
+
+## Stop
+
+Stopping is not a cell, since the app evaluates every cell when it starts.
+Copy it into one when you need it:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+NervesLivebookFP3.Launcher.stop()
+```

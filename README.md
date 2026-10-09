@@ -41,6 +41,16 @@ Notebooks ship in `priv/samples` and are copied to
 Livebook's home page. A notebook that's already on `/data` is never
 overwritten, so attendee edits survive reboots and firmware updates.
 
+`NervesLivebookFP3.Launcher` is a status screen (IP addresses, battery,
+screen off, suspend) drawn with Emerge. `notebooks/launcher.livemd` starts
+it and is not shipped. `scripts/push-launcher.sh` copies that notebook to
+the phone, or with `--app` installs it as a Livebook app that starts the
+launcher at boot. It's the same file either way, so it has no cell that
+stops the launcher.
+
+`scripts/hot-load.sh FILE.ex ...` compiles files into the running phone,
+for trying a change without a firmware update. It's lost on reboot.
+
 The hardware notebooks use these libraries, all started at boot:
 `ex_qcom_smgr` (sensors), `fp3_camera`, `ex_nfc`, `ex_location` (GPS,
 and the QMI client the modem notebook uses), plus the kernel's LED
