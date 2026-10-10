@@ -41,8 +41,12 @@ Notebooks ship in `priv/samples` and are copied to
 Livebook's home page. A notebook that's already on `/data` is never
 overwritten, so attendee edits survive reboots and firmware updates.
 
-The launcher, a status screen that can start at boot, is documented in
-[`LAUNCHER.md`](LAUNCHER.md).
+The firmware also has a launcher, a status screen with battery, IP
+addresses and suspend. It's off by default, so workshop phones don't start
+it. To have the firmware start it at boot on one phone, run
+`NervesLivebookFP3.Launcher.autostart(true)` there and reboot. See
+[`LAUNCHER.md`](LAUNCHER.md), including why it must not run as a Livebook
+app.
 
 The hardware notebooks use these libraries, all started at boot:
 `ex_qcom_smgr` (sensors), `fp3_camera`, `ex_nfc`, `ex_location` (GPS,
@@ -138,6 +142,7 @@ nerves_livebook_fp3
 ├── ex_rmtfs, ex_remoteproc   modem storage daemon, ADSP start-up
 ├── ex_qcom_smgr, fp3_camera, ex_audio, ex_nfc, ex_location, ex_qbootctl
 ├── fp3_modem, vintage_net_qmi, qmi   cellular (only with FP3_APN)
+├── NervesLivebookFP3.Launcher   status screen (only with autostart on)
 └── livebook + kino
 ```
 

@@ -17,24 +17,36 @@ NervesLivebookFP3.Launcher.stop()    # stops it, gives the screen back to the co
 
 ## Starting it at boot
 
-`notebooks/launcher.livemd` calls `start/0`. It isn't in `priv/samples`, so
-it doesn't ship to workshop phones. Copy it to a phone with:
+The firmware starts the launcher at boot on phones where autostart is on.
+A task in `NervesLivebookFP3.Application` waits up to 30 seconds for the
+display driver, then starts the launcher as a temporary child of
+`NervesLivebookFP3.Supervisor`, so a crash doesn't restart it in a loop.
 
-```sh
-scripts/push-launcher.sh          # to /data/livebook/notebooks, to run by hand
-scripts/push-launcher.sh --app    # to /data/livebook/apps, starts at boot
+```elixir
+NervesLivebookFP3.Launcher.autostart(true)    # start at boot on this phone
+NervesLivebookFP3.Launcher.autostart(false)   # don't
+NervesLivebookFP3.Launcher.autostart?()
 ```
 
-Livebook deploys every notebook in `/data/livebook/apps` when it starts,
-and a single-session app evaluates all its cells, so reboot after `--app`.
-The notebook is the same file either way. Because the app evaluates every
-cell, the stop call is a non-runnable snippet (`force_markdown`) rather
-than a cell. To remove the app, stop it on Livebook's Apps page and delete
-`/data/livebook/apps/launcher.livemd`.
+The setting is the file `/data/launcher/autostart`. It survives firmware
+updates and is off on a freshly flashed phone, so workshop phones built
+from this repo don't start the launcher.
 
-The phone has no SFTP, so both scripts send files over SSH as base64. Close
-the notebook in Livebook before pushing, or its autosave overwrites the
-copy. Set `NERVES_HOST` to reach a phone other than `nerves.local`.
+Don't run the launcher as a Livebook app. While a Livebook runtime is
+active, Livebook registers its own process as `:standard_error`. On this
+OTP version, the console driver `user_drv` calls `io:setopts(standard_error,
+...)` while handling an encoding change on `user`, and Livebook's process
+forwards that back to `user`, which is waiting on `user_drv`. The two
+deadlock, and from then on every SSH shell crashes when you press Enter.
+An app keeps a runtime active from boot, so the deadlock is only one
+encoding change away.
+
+`notebooks/launcher.livemd` has cells for autostart, starting and stopping.
+It isn't in `priv/samples`, so it doesn't ship to workshop phones. Copy it
+to a phone with `scripts/push-launcher.sh`. The phone has no SFTP, so it
+goes over SSH as base64. Close the notebook in Livebook before pushing, or
+its autosave overwrites the copy. Set `NERVES_HOST` to reach a phone other
+than `nerves.local`.
 
 ## Changing the code
 
@@ -58,6 +70,10 @@ it with `mix firmware && mix upload`.
   launcher is up.
 - After a viewport stops, Emerge can't start another until the phone
   reboots (see `HANDOFF.md`). That includes restarting the launcher.
+- The SSH shell deadlock above can also happen while a notebook session is
+  open, since Livebook swaps `:standard_error` then too. `ssh -T` (no
+  line editing) and `ssh nerves.local '<elixir>'` keep working; a reboot
+  clears it.
 - A suspend longer than about 30 seconds can reboot the phone. The likely
   cause is `heart` (`HEART_BEAT_TIMEOUT 30` in `rel/vm.args.eex`) counting
   the suspended time as a hung VM. Not confirmed yet.

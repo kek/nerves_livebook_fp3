@@ -6,6 +6,10 @@ defmodule NervesLivebookFP3.Launcher do
       NervesLivebookFP3.Launcher.start()
       NervesLivebookFP3.Launcher.stop()
 
+  To start it at boot on this phone, run `autostart(true)` once. The
+  setting is a file on `/data`, so it survives firmware updates and is off
+  on a freshly flashed phone.
+
   Only one UI can own the display, so stop Scenic and Emerge viewports
   from other notebooks first. Once a viewport has been stopped, Emerge
   can't start another one until the phone reboots (see `HANDOFF.md`).
@@ -14,6 +18,7 @@ defmodule NervesLivebookFP3.Launcher do
   use Emerge
 
   @battery "/sys/class/power_supply/qg-battery"
+  @autostart "/data/launcher/autostart"
 
   @doc """
   Detaches the console from the screen and starts the launcher on the
@@ -22,6 +27,33 @@ defmodule NervesLivebookFP3.Launcher do
   def start do
     bind_console("0")
     start_link(drm_card: drm_card(), name: __MODULE__)
+  end
+
+  @doc "Turns starting the launcher at boot on or off for this phone."
+  def autostart(true) do
+    File.mkdir_p!(Path.dirname(@autostart))
+    File.touch!(@autostart)
+  end
+
+  def autostart(false), do: File.rm(@autostart)
+
+  def autostart?, do: File.exists?(@autostart)
+
+  @doc """
+  Starts the launcher under `supervisor` if autostart is on. The display
+  driver may still be probing at boot, so it waits up to 30 seconds for it.
+  """
+  def start_at_boot(supervisor) do
+    if autostart?() and wait_for_display(30) do
+      spec = %{id: __MODULE__, start: {__MODULE__, :start, []}, restart: :temporary}
+      Supervisor.start_child(supervisor, spec)
+    end
+  end
+
+  defp wait_for_display(0), do: false
+
+  defp wait_for_display(tries) do
+    find_drm_card() != nil or (Process.sleep(1_000) && wait_for_display(tries - 1))
   end
 
   @doc "Stops the launcher and gives the screen back to the console."
@@ -39,14 +71,18 @@ defmodule NervesLivebookFP3.Launcher do
     |> File.write!(value)
   end
 
+  defp drm_card, do: "/dev/dri/" <> Path.basename(find_drm_card())
+
   # The card number depends on probe order.
-  defp drm_card do
+  defp find_drm_card do
     "/sys/class/drm/card?"
     |> Path.wildcard()
     |> Enum.find(fn card ->
-      card |> Path.join("device/driver") |> File.read_link!() |> Path.basename() =~ "msm"
+      case File.read_link(Path.join(card, "device/driver")) do
+        {:ok, driver} -> Path.basename(driver) =~ "msm"
+        {:error, _} -> false
+      end
     end)
-    |> then(&("/dev/dri/" <> Path.basename(&1)))
   end
 
   defp backlight, do: "/sys/class/backlight/*" |> Path.wildcard() |> List.first()

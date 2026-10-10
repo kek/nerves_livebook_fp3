@@ -1,5 +1,3 @@
-<!-- livebook:{"app_settings":{"access_type":"public","slug":"launcher"}} -->
-
 # Launcher
 
 ## Overview
@@ -14,14 +12,30 @@ The code is `NervesLivebookFP3.Launcher` in
 `lib/nerves_livebook_fp3/launcher.ex`. Edit it there and load it into the
 running phone with `scripts/hot-load.sh`.
 
-This notebook also runs as a Livebook app (`scripts/push-launcher.sh --app`),
-which evaluates every cell at boot.
+## Start at boot
 
-## Start
+The firmware starts the launcher at boot on phones where autostart is on.
+It's off on a freshly flashed phone:
 
 ```elixir
-{:ok, _} = NervesLivebookFP3.Launcher.start()
+NervesLivebookFP3.Launcher.autostart(true)
 ```
+
+```elixir
+NervesLivebookFP3.Launcher.autostart?()
+```
+
+## Start and stop by hand
+
+```elixir
+NervesLivebookFP3.Launcher.start()
+```
+
+```elixir
+NervesLivebookFP3.Launcher.stop()
+```
+
+After a stop, Emerge can't start another viewport until the phone reboots.
 
 ## Check power support
 
@@ -30,15 +44,4 @@ suspend `mem` means; the one in brackets is used.
 
 ```elixir
 {File.read!("/sys/power/state"), File.read!("/sys/power/mem_sleep"), File.ls("/sys/class/backlight")}
-```
-
-## Stop
-
-Stopping is not a cell, since the app evaluates every cell when it starts.
-Copy it into one when you need it:
-
-<!-- livebook:{"force_markdown":true} -->
-
-```elixir
-NervesLivebookFP3.Launcher.stop()
 ```
