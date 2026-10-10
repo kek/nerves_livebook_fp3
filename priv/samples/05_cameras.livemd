@@ -3,11 +3,17 @@
 ## Overview
 
 `Fp3Camera` takes stills and streams video from the `:rear` and `:front`
-cameras.
+cameras. The phone's camera image processor turns the sensors' raw data
+into pictures in hardware: it demosaics, white balances, colour corrects
+and scales every frame, so the CPU only encodes.
 
 ## Which sensors are fitted?
 
-The camera modules can be swapped, so ask which sensor each slot holds:
+The camera modules can be swapped: a Fairphone 3 carries a Sony IMX363
+at the rear and a Samsung S5K4H7YX at the front, a Fairphone 3+ a
+Samsung S5KGM1SP and S5K3P9SP, and a phone can mix them. Ask which
+sensor each slot holds, its sizes and whether it has a focus motor
+(`:lens`):
 
 ```elixir
 Fp3Camera.info(:rear)
@@ -19,111 +25,229 @@ Fp3Camera.info(:front)
 
 ## Take a photo
 
-A full-resolution still (12 MP on the rear) takes about 30 seconds.
+A full-resolution still takes about a second:
 
 ```elixir
 {:ok, jpeg} = Fp3Camera.snap_bytes(:rear)
 Kino.Image.new(jpeg, :jpeg)
 ```
 
-Faster and smaller, with 2×2 binning:
+With 2×2 binning, the same view at a quarter of the pixels, it is quicker:
 
 ```elixir
 {:ok, jpeg} = Fp3Camera.snap_bytes(:front, binned: true)
 Kino.Image.new(jpeg, :jpeg)
 ```
 
-## Tune the picture
+## Choose the settings
 
-On Android, a dedicated image processor and years of per-sensor tuning
-turn the sensor's raw data into a photo. Here that work happens in
-software, in the `cam-snap` program: white balance, demosaicing, a tone
-curve, sharpening and noise reduction. Every step has a setting, so you
-can tune it yourself.
+Pick a camera and the panel shows the settings that camera takes: its
+resolutions, the zoom it reaches at the chosen resolution and, on a
+camera with a focus motor, the focus. Then press **Take photo**.
 
-The sliders start at the default values. Change them, then run the next
-cell to take a quick (2×2-binned) photo with them:
+* **Zoom** is digital: the image processor crops the middle of the
+  sensor's largest mode and scales it down to the resolution, so it
+  reaches further at smaller resolutions.
+* **White balance**, **exposure** and **gain** are automatic unless you
+  set them. Exposure is capped by the frame time, about 33 ms.
+* **Focus** goes from 0 (far away) to 1023 (very close). There is no
+  autofocus yet, so the lens stays where you leave it.
 
 ```elixir
-camera = Kino.Input.select("Camera", rear: "Rear", front: "Front")
-gamma = Kino.Input.range("Gamma: brightness of the mid-tones", min: 1.0, max: 3.0, step: 0.1, default: 2.2)
-contrast = Kino.Input.range("Contrast", min: 0.0, max: 1.0, step: 0.05, default: 0.35)
-saturation = Kino.Input.range("Saturation: colour strength", min: 0.0, max: 2.5, step: 0.1, default: 1.5)
-brightness = Kino.Input.range("Brightness", min: 0.5, max: 2.5, step: 0.1, default: 1.0)
-sharpen = Kino.Input.range("Sharpening (0 = off)", min: 0.0, max: 3.0, step: 0.1, default: 1.0)
-denoise = Kino.Input.range("Noise reduction (0 = off)", min: 0, max: 10, step: 1, default: 4)
-white_balance =
-  Kino.Input.select("White balance",
-    default: "Camera default",
-    auto: "Automatic (from the picture)",
-    fixed: "Fixed gains"
-  )
+panel = Kino.Frame.new()
+photo = Kino.Frame.new()
+{:ok, last} = Agent.start_link(fn -> nil end)
 
-warmth = Kino.Input.range("Warmth: extra red", min: 0.8, max: 1.3, step: 0.01, default: 1.05)
+auto_manual = [auto: "Automatic", manual: "Manual"]
 
-# The rear camera's lens is moved by a motor; the front ones are fixed-focus.
-focus_mode = Kino.Input.select("Focus (rear camera)", auto: "Automatic", manual: "Manual")
-focus = Kino.Input.range("Manual focus: 0 = far away, 1023 = very close", min: 0, max: 1023, step: 1, default: 300)
+form_for = fn values ->
+  camera = values[:camera] || :rear
+  {:ok, info} = Fp3Camera.info(camera)
+  {:ok, sizes} = Fp3Camera.sizes(camera)
+  size = if values[:size] in sizes, do: values[:size], else: hd(sizes)
+  {:ok, max_zoom} = Fp3Camera.max_zoom(camera, size)
 
-Kino.Layout.grid(
-  [camera, gamma, contrast, saturation, brightness, sharpen, denoise, white_balance, warmth,
-   focus_mode, focus],
-  columns: 2
-)
+  zoom =
+    if max_zoom > 1.0,
+      do: [
+        zoom:
+          Kino.Input.range("Zoom (up to #{max_zoom}× at this resolution)",
+            min: 1.0,
+            max: max_zoom,
+            step: 0.01,
+            default: min(values[:zoom] || 1.0, max_zoom)
+          )
+      ],
+      else: []
+
+  focus =
+    if info.lens,
+      do: [
+        focus:
+          Kino.Input.range("Focus: 0 = far away, 1023 = very close",
+            min: 0,
+            max: 1023,
+            step: 1,
+            default: values[:focus] || 300
+          )
+      ],
+      else: []
+
+  fields =
+    [
+      camera:
+        Kino.Input.select("Camera (#{info.sensor})", [rear: "Rear", front: "Front"],
+          default: camera
+        ),
+      size:
+        Kino.Input.select("Resolution", for({w, h} <- sizes, do: {{w, h}, "#{w}×#{h}"}),
+          default: size
+        )
+    ] ++
+      zoom ++
+      [
+        white_balance:
+          Kino.Input.select("White balance", auto_manual, default: values[:white_balance] || :auto),
+        red: Kino.Input.range("Manual white balance: red gain", min: 1.0, max: 3.99, step: 0.01, default: values[:red] || 2.0),
+        blue: Kino.Input.range("Manual white balance: blue gain", min: 1.0, max: 3.99, step: 0.01, default: values[:blue] || 1.6),
+        exposure: Kino.Input.select("Exposure", auto_manual, default: values[:exposure] || :auto),
+        exposure_ms: Kino.Input.range("Manual exposure (ms)", min: 0.1, max: 33.0, step: 0.1, default: values[:exposure_ms] || 10.0),
+        gain: Kino.Input.select("Gain", auto_manual, default: values[:gain] || :auto),
+        gain_x: Kino.Input.range("Manual gain (×)", min: 1.0, max: 16.0, step: 0.1, default: values[:gain_x] || 1.0)
+      ] ++ focus
+
+  Kino.Control.form(fields, submit: "Take photo", report_changes: true)
+end
+
+settings_of = fn v ->
+  [zoom: v[:zoom] || 1.0] ++
+    if(v.white_balance == :manual, do: [wb: {v.red, 1.0, v.blue}], else: [awb: true]) ++
+    if(v.exposure == :manual, do: [exposure: round(v.exposure_ms * 1000)], else: []) ++
+    if(v.gain == :manual, do: [gain: v.gain_x], else: []) ++
+    if(v[:focus], do: [focus: round(v.focus)], else: [])
+end
+
+show = fn show, values ->
+  form = form_for.(values)
+  Kino.Frame.render(panel, form)
+
+  Kino.listen(form, fn
+    %{type: :change, data: data} ->
+      if data.camera != values[:camera] or data.size != values[:size], do: show.(show, data)
+
+    %{type: :submit, data: data} ->
+      {w, h} = data.size
+      settings = settings_of.(data)
+      Kino.Frame.render(photo, Kino.Text.new("Taking the photo..."))
+
+      case Fp3Camera.snap_bytes(data.camera, [width: w, height: h] ++ settings) do
+        {:ok, jpeg} ->
+          Agent.update(last, fn _ -> {data.camera, settings} end)
+          Kino.Frame.render(photo, Kino.Image.new(jpeg, :jpeg))
+
+        {:error, reason} ->
+          Kino.Frame.render(photo, Kino.Text.new("Not taken: #{inspect(reason)}"))
+      end
+  end)
+end
+
+show.(show, %{camera: :rear})
+Kino.Layout.grid([panel, photo], columns: 1)
 ```
 
-```elixir
-settings = [
-  gamma: Kino.Input.read(gamma),
-  contrast: Kino.Input.read(contrast),
-  saturation: Kino.Input.read(saturation),
-  brightness: Kino.Input.read(brightness),
-  sharpen: if(Kino.Input.read(sharpen) == 0, do: false, else: Kino.Input.read(sharpen)),
-  denoise: round(Kino.Input.read(denoise)),
-  warm_bias: Kino.Input.read(warmth)
-]
-
-settings =
-  case Kino.Input.read(white_balance) do
-    :auto -> settings ++ [awb: true]
-    :fixed -> settings ++ [awb: false]
-    :default -> settings
-  end
-
-settings =
-  cond do
-    Kino.Input.read(camera) == :front -> settings
-    Kino.Input.read(focus_mode) == :auto -> settings ++ [focus: :auto]
-    true -> settings ++ [focus: round(Kino.Input.read(focus))]
-  end
-
-{:ok, jpeg} = Fp3Camera.snap_bytes(Kino.Input.read(camera), [binned: true] ++ settings)
-Kino.Image.new(jpeg, :jpeg)
-```
-
-`Fp3Camera.snap/3` documents more settings: `:exposure`, `:gain`,
-explicit white-balance gains (`wb: {r, g, b}`) and lens shading
-correction (`:lsc`). The cameras have no optical zoom.
-
-Happy with the result? Make it the default for this camera's photos and
-keep it across reboots:
+Happy with the result? Make the last photo's settings the default for
+that camera's photos, and keep them across reboots:
 
 ```elixir
-Fp3Camera.Config.put({Kino.Input.read(camera), :snap}, settings)
-Fp3Camera.Config.save()
+case Agent.get(last, & &1) do
+  {camera, settings} ->
+    Fp3Camera.configure({camera, :snap}, settings)
+    Fp3Camera.save_config()
+
+  nil ->
+    "Take a photo with the panel first"
+end
 ```
 
 To go back to the built-in values:
 
 ```elixir
-Fp3Camera.Config.reset()
-Fp3Camera.Config.save()
+Fp3Camera.reset_config()
+Fp3Camera.save_config()
+```
+
+## Watch it live
+
+The camera's video, here in the notebook. Each frame is shown as soon as
+it arrives and any that queued up behind it are dropped, so the picture
+never lags behind the camera. Switch cameras while it runs; press
+**Stop** to end it.
+
+```elixir
+camera = Kino.Input.select("Camera", rear: "Rear", front: "Front")
+stop = Kino.Control.button("Stop")
+video = Kino.Frame.new()
+Kino.render(Kino.Layout.grid([camera, stop], columns: 2))
+Kino.render(video)
+Kino.Control.subscribe(camera, :camera)
+Kino.Control.subscribe(stop, :stop)
+
+# The camera being left is released just after, so a quick switch back
+# may find it still busy for a moment
+watch = fn watch, which, tries ->
+  case Fp3Camera.subscribe(which, width: 1280, height: 720) do
+    {:ok, feed} ->
+      feed
+
+    {:error, :busy} when tries > 0 ->
+      Process.sleep(100)
+      watch.(watch, which, tries - 1)
+  end
+end
+
+newest = fn newest, frame ->
+  receive do
+    {:camera_frame, next} -> newest.(newest, next)
+  after
+    0 -> frame
+  end
+end
+
+show = fn show, feed ->
+  receive do
+    {:stop, _event} ->
+      Fp3Camera.unsubscribe(feed)
+
+    {:camera, %{value: which}} ->
+      Fp3Camera.unsubscribe(feed)
+      show.(show, watch.(watch, which, 20))
+
+    {:camera_frame, frame} ->
+      %{data: nv12, width: w, height: h} = newest.(newest, frame)
+
+      jpeg =
+        nv12
+        |> Evision.Mat.from_binary({:u, 8}, div(h * 3, 2), w, 1)
+        |> Evision.cvtColor(Evision.Constant.cv_COLOR_YUV2BGR_NV12())
+        |> then(&Evision.imencode(".jpg", &1, params: [Evision.Constant.cv_IMWRITE_JPEG_QUALITY(), 70]))
+
+      Kino.Frame.render(video, Kino.Image.new(jpeg, :jpeg))
+      show.(show, feed)
+  end
+end
+
+show.(show, watch.(watch, Kino.Input.read(camera), 20))
 ```
 
 ## Stream video
 
-The stream is raw H.264 over TCP, which a browser can't play. On your
-laptop, open it with `ffplay tcp://nerves.local:8888` (or `mpv`).
+The stream is H.264, encoded by the phone's video hardware, sent as raw
+H.264 over TCP, which a browser can't play. On your laptop, open it
+with `ffplay tcp://nerves.local:8888` (or `mpv`); the front camera
+streams on port 8890. You can connect and disconnect at any time.
+Streams are 1920x1080 at 30 fps and 8 Mbit/s unless you pass `:width`,
+`:height`, `:framerate` or `:bitrate`, and they take the same settings
+as photos, `:zoom` included.
 
 ```elixir
 {:ok, stream} = Fp3Camera.start_stream(:rear)
