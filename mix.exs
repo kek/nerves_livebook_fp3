@@ -2,7 +2,7 @@ defmodule NervesLivebookFP3.MixProject do
   use Mix.Project
 
   @app :nerves_livebook_fp3
-  @version "0.1.1"
+  @version "0.2.0"
 
   # Deterministic builds — same input, same firmware bytes.
   System.put_env("ERL_COMPILER_OPTIONS", "deterministic")
@@ -21,7 +21,7 @@ defmodule NervesLivebookFP3.MixProject do
           {"WHISPER_CPP_BUILD", "1"},
           {"GGML_NATIVE", "OFF"},
           {"GGML_CPU_ARM_ARCH", "armv8-a"},
-          # Rust NIFs (whisper_cpp, cpu_topology) cross-compile with the Nerves
+          # The whisper_cpp Rust NIF cross-compiles with the Nerves
           # toolchain, which is on PATH while dependencies compile. whisper-rs-sys
           # uses its bundled bindings instead of generating them with libclang.
           {"CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu"},
@@ -70,7 +70,7 @@ defmodule NervesLivebookFP3.MixProject do
         :fp3_modem,
         :ex_nfc,
         :ex_location,
-        # At boot: first-boot data partition grow and thread pinning.
+        # At boot: first-boot data partition grow.
         :nerves_ai
       ]
     ]
@@ -107,10 +107,9 @@ defmodule NervesLivebookFP3.MixProject do
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
       # ---------------- AI stack ----------------
-      # nerves_ai composes the stack; cpu_topology places work on the fast
-      # cluster. The engine packages are built for the phone only.
+      # nerves_ai composes the stack. The engine packages are built for the
+      # phone only.
       sibling(:nerves_ai, "NERVES_AI_PATH"),
-      sibling(:cpu_topology, "CPU_TOPOLOGY_PATH"),
       sibling(:nerves_data_resize, "NERVES_DATA_RESIZE_PATH"),
       {:llama_cpp_ex, "~> 0.8", targets: :nerves_system_fp3},
       {:whisper_cpp, "~> 0.5", targets: :nerves_system_fp3},
@@ -121,7 +120,7 @@ defmodule NervesLivebookFP3.MixProject do
       # `env: :dev` makes nx_eigen build from source with the Nerves toolchain:
       # its precompiled aarch64 NIF links FFTW, which the system image lacks.
       {:nx_eigen, "~> 0.2", targets: :nerves_system_fp3, env: :dev},
-      # Builds whisper_cpp from source and cpu_topology's NIF from its crate.
+      # Builds whisper_cpp from source.
       {:rustler, "~> 0.38.0", runtime: false},
 
       # ---------------- FP3 hardware userspace ----------------
@@ -129,13 +128,13 @@ defmodule NervesLivebookFP3.MixProject do
       {:ex_remoteproc, github: "mlainez/ex_remoteproc", override: true},
       {:ex_qcom_smgr, github: "mlainez/ex_qcom_smgr", override: true},
       {:ex_qbootctl, github: "mlainez/ex_qbootctl", override: true},
-      {:ex_audio, github: "mlainez/ex_audio", override: true},
-      {:fp3_camera, github: "mlainez/fp3_camera", override: true},
+      sibling(:ex_audio, "EX_AUDIO_PATH"),
+      sibling(:fp3_camera, "FP3_CAMERA_PATH"),
       {:qmi, github: "mlainez/qmi", branch: "qrtr-transport", override: true},
       {:vintage_net_qmi,
        github: "mlainez/vintage_net_qmi", branch: "qrtr-transport", override: true},
       {:fp3_modem, github: "mlainez/fp3_modem", override: true},
-      {:ex_nfc, github: "mlainez/ex_nfc", override: true},
+      sibling(:ex_nfc, "EX_NFC_PATH"),
       {:ex_location, github: "mlainez/ex_location", override: true},
       {:blue_heron, github: "mlainez/blue_heron", targets: :nerves_system_fp3},
 
@@ -143,7 +142,7 @@ defmodule NervesLivebookFP3.MixProject do
       # The prebuilt system comes from the tag's GitHub release.
       {:nerves_system_fp3,
        github: "mlainez/nerves_system_fp3",
-       tag: "v0.2.2",
+       tag: "v0.3.0",
        runtime: false,
        targets: :nerves_system_fp3}
     ]
