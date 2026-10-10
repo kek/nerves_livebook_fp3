@@ -10,38 +10,56 @@ The phone has three audio parts:
 
 The earpiece and the microphone go through the WCD9335 audio codec. All
 three are driven through the phone's audio DSP. Sound is played on
-`plughw:0,0` and recorded from `hw:0,1`; ALSA mixer controls decide where
-it goes.
+`plughw:0,0` and recorded from `hw:0,1`; ALSA mixer controls decide
+whether playback goes to the loudspeaker or the earpiece.
 
-`ExAudio` sets those controls. This helper applies a list of them and
-shows the result of each one:
+Switch between them while nothing is playing: changing the route in the
+middle of a playback stops it with an input/output error. To move a
+sound that is playing, stop it, switch, and carry on from where it was;
+[Switch while playing](#switch-while-playing) shows how.
+
+The loudspeaker module is what differs between the Fairphone 3 and the
+3+, and since it can be swapped, a phone sold as one may carry the
+other's:
+
+| Loudspeaker module | Amplifier | Sound card name |
+| --- | --- | --- |
+| Fairphone 3 | Awinic AW8898 | `Fairphone 3` |
+| Fairphone 3+ | TI TAS2557 | `Fairphone 3+` |
+
+Only the TAS2557 has a `Speaker Switch` control. This cell reads the sound
+card name to know whether to set it. `ExAudio` sets the mixer controls;
+`set` applies a list of them and shows the result of each one:
 
 ```elixir
+tas2557? = File.read!("/proc/asound/cards") =~ "Fairphone 3+"
+
+speaker_switch = fn value -> if tas2557?, do: [{"Speaker Switch", value}], else: [] end
+
 set = fn controls ->
   for {name, value} <- controls, do: {name, ExAudio.cset(name, value)}
 end
+
+IO.puts("Loudspeaker amplifier: #{if tas2557?, do: "TAS2557", else: "AW8898"}")
 ```
 
 ## Loudspeaker
 
 ### Route audio to the loudspeaker
 
-At boot the firmware already enables this route for the Fairphone 3+.
-Run it again to come back from the earpiece.
+The firmware enables this route at boot. Run it again to come back from
+the earpiece.
 
 ```elixir
-speaker = [
-  {"Earpiece Switch", :off},
-  {"SLIMBUS_0_RX Audio Mixer MultiMedia1", :off},
-  {"QUIN_MI2S_RX Audio Mixer MultiMedia1", :on},
-  {"Speaker Switch", :on}
-]
+speaker =
+  [
+    {"Earpiece Switch", :off},
+    {"SLIMBUS_0_RX Audio Mixer MultiMedia1", :off},
+    {"QUIN_MI2S_RX Audio Mixer MultiMedia1", :on}
+  ] ++ speaker_switch.(:on)
 
 set.(speaker)
 ```
-
-Only the Fairphone 3+ amplifier has a `Speaker Switch`, so that line
-returns an error on a Fairphone 3.
 
 ### Play a tone
 
@@ -82,17 +100,18 @@ This turns the loudspeaker off and sends the same playback device to the
 earpiece instead.
 
 ```elixir
-earpiece = [
-  {"Speaker Switch", :off},
-  {"QUIN_MI2S_RX Audio Mixer MultiMedia1", :off},
-  {"SLIMBUS_0_RX Audio Mixer MultiMedia1", :on},
-  {"SLIM RX0 MUX", "AIF_MIX1_PB"},
-  {"RX INT0_1 MIX1 INP0", "RX0"},
-  {"RX INT0 DEM MUX", "CLSH_DSM_OUT"},
-  {"RX0 Digital Volume", 84},
-  {"EAR PA Volume", 4},
-  {"Earpiece Switch", :on}
-]
+earpiece =
+  speaker_switch.(:off) ++
+    [
+      {"QUIN_MI2S_RX Audio Mixer MultiMedia1", :off},
+      {"SLIMBUS_0_RX Audio Mixer MultiMedia1", :on},
+      {"SLIM RX0 MUX", "AIF_MIX1_PB"},
+      {"RX INT0_1 MIX1 INP0", "RX0"},
+      {"RX INT0 DEM MUX", "CLSH_DSM_OUT"},
+      {"RX0 Digital Volume", 84},
+      {"EAR PA Volume", 4},
+      {"Earpiece Switch", :on}
+    ]
 
 set.(earpiece)
 ```
@@ -107,6 +126,109 @@ System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/melody.wav"], stderr_to_stdout: t
 ```
 
 Run the loudspeaker route above to switch back.
+
+## Switch while playing
+
+A call app moves the sound between the earpiece and the loudspeaker while
+it plays. The route can only change while nothing plays, so this player
+feeds the sound to `aplay` a tenth of a second at a time. Switching stops
+`aplay`, waits until the sound card has closed the stream, applies the
+new route and starts a new `aplay` with the rest of the sound. There is
+a short gap at the switch.
+
+```elixir
+defmodule SwitchablePlayer do
+  @chunk_ms 100
+  @prefill 3
+
+  # Plays mono samples (floats between -1.0 and 1.0) at `rate` and
+  # returns the player.
+  def start(samples, rate) do
+    pcm = for sample <- samples, into: <<>>, do: <<round(sample * 32_767)::little-signed-16>>
+    spawn(fn -> play(pcm, rate) end)
+  end
+
+  # Moves the sound to another route: `route` is called while nothing plays.
+  def switch(player, route), do: send(player, {:switch, route})
+
+  defp play(pcm, rate) do
+    port = open(rate)
+    pcm = feed(port, pcm, rate, @prefill)
+    loop(port, pcm, rate, System.monotonic_time(:millisecond), 0)
+  end
+
+  defp loop(port, <<>>, _rate, _t0, _n), do: send(port, {self(), :close})
+
+  defp loop(port, pcm, rate, t0, n) do
+    receive do
+      {:switch, route} ->
+        stop(port)
+        route.()
+        play(pcm, rate)
+    after
+      max(t0 + n * @chunk_ms - System.monotonic_time(:millisecond), 0) ->
+        loop(port, feed(port, pcm, rate, 1), rate, t0, n + 1)
+    end
+  end
+
+  defp feed(port, pcm, rate, chunks) do
+    size = min(byte_size(pcm), div(rate * 2 * @chunk_ms, 1000) * chunks)
+    <<chunk::binary-size(size), rest::binary>> = pcm
+    Port.command(port, chunk)
+    rest
+  end
+
+  defp open(rate) do
+    aplay = System.find_executable("aplay")
+    args = ~w(-q -D plughw:0,0 -t raw -f S16_LE -c 1 -r #{rate} -)
+    Port.open({:spawn_executable, aplay}, [:binary, :exit_status, args: args])
+  end
+
+  # SIGKILL: on SIGTERM, an aplay waiting for more sound keeps waiting.
+  defp stop(port) do
+    {:os_pid, pid} = Port.info(port, :os_pid)
+    System.cmd("kill", ["-KILL", Integer.to_string(pid)])
+
+    receive do
+      {^port, {:exit_status, _}} -> :ok
+    after
+      2_000 -> :ok
+    end
+
+    wait_closed(30)
+  end
+
+  # The card shuts the old route down after the stream closes, and the
+  # device is busy until then.
+  defp wait_closed(0), do: :timeout
+
+  defp wait_closed(tries) do
+    case File.read("/proc/asound/card0/pcm0p/sub0/status") do
+      {:ok, "closed" <> _} -> :ok
+      _ -> Process.sleep(100) && wait_closed(tries - 1)
+    end
+  end
+end
+```
+
+Play the melody four times on the loudspeaker:
+
+```elixir
+set.(speaker)
+player = SwitchablePlayer.start(List.flatten(List.duplicate(melody, 4)), rate)
+```
+
+While it plays, move it to the earpiece:
+
+```elixir
+SwitchablePlayer.switch(player, fn -> set.(earpiece) end)
+```
+
+And back to the loudspeaker:
+
+```elixir
+SwitchablePlayer.switch(player, fn -> set.(speaker) end)
+```
 
 ## Microphone
 
@@ -124,6 +246,38 @@ microphone = [
 ]
 
 set.(microphone)
+```
+
+### Which microphone?
+
+The phone has two microphones, both digital microphones on the codec, and
+they sit at opposite ends:
+
+| Input | Where | What it is for |
+| --- | --- | --- |
+| `DMIC1` | bottom, next to the loudspeaker | the main microphone: voice and recordings |
+| `DMIC2` | top, next to the earpiece | the second microphone, used to pick up background noise |
+
+It is the same on the Fairphone 3 and the 3+. The route above selects
+`DMIC1`. The codec's other inputs (`DMIC0`, `DMIC3` to `DMIC5` and the
+analog ones) have nothing connected and record silence or noise.
+
+`DMIC MUX7` picks the microphone. This shows which one is selected:
+
+```elixir
+dmics = ~w(ZERO DMIC0 DMIC1 DMIC2 DMIC3 DMIC4 DMIC5)
+{:ok, index} = ExAudio.cget("DMIC MUX7")
+IO.puts("Recording from #{Enum.at(dmics, String.to_integer(index))}")
+```
+
+And this switches. Pick `"DMIC2"`, run the recording below, then compare it
+with one made on `"DMIC1"`: holding the top or the bottom of the phone
+close to your mouth makes the difference obvious.
+
+```elixir
+use_microphone = fn mic -> set.([{"DMIC MUX7", mic}]) end
+
+use_microphone.("DMIC2")
 ```
 
 ### Record
@@ -166,11 +320,17 @@ more.
 
 ### Play it back
 
-Plays the recording on the loudspeaker. Route it to the earpiece first
-to hear it there instead.
+Plays the recording on the loudspeaker:
 
 ```elixir
 set.(speaker)
+System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/me.wav"], stderr_to_stdout: true)
+```
+
+Or in the earpiece:
+
+```elixir
+set.(earpiece)
 System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/me.wav"], stderr_to_stdout: true)
 ```
 
