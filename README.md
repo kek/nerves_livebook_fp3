@@ -27,14 +27,14 @@ Fairphone 3 hardware libraries loaded.
 | `02_led_flash_vibrator.livemd` | RGB notification LED, flashlight, vibrator |
 | `03_sensors.livemd` | Accelerometer, gyroscope, magnetometer, proximity |
 | `04_battery.livemd` | Battery level, charging status, voltage, current, temperature |
-| `05_cameras.livemd` | Photos from both cameras, tuning the picture and focus, H.264 video stream |
+| `05_cameras.livemd` | Which sensors are fitted, photos with per-camera settings (resolution, zoom, exposure, gain, white balance, focus), live video in the notebook, H.264 streams |
 | `06_nfc.livemd` | Detect NFC tags and contactless cards |
 | `07_gps.livemd` | Satellites in view and position fixes |
 | `08_modem.livemd` | IMEI, operating mode, home network, signal strength |
 | `09_bluetooth.livemd` | Scan for BLE devices, advertise the phone, share its battery level over GATT |
 | `10_audio.livemd` | Loudspeaker, earpiece and microphone: tones, recording, playback |
 | `11_screen_touch_buttons.livemd` | Draw on the screen, touch input, volume and power buttons |
-| `12_ai_on_the_phone.livemd` | The AI stack, CPU placement, Nx speed, YOLO object detection, Whisper speech to text, TinyLlama chat, generated sound |
+| `12_ai_on_the_phone.livemd` | The AI stack, YOLO object detection on a photo and live on video, Whisper speech to text, TinyLlama chat |
 
 Notebooks ship in `priv/samples` and are copied to
 `/data/livebook/notebooks` at boot, then starred so they appear on
@@ -67,8 +67,8 @@ the phone to Wi-Fi, and start the matching capability (`NervesAI.LLM`,
   the official Nerves systems, and the `nerves_bootstrap` archive.
 * Rust 1.98 or newer with the `aarch64-unknown-linux-gnu` target
   (`rustup toolchain install 1.99.0 -t aarch64-unknown-linux-gnu`, then
-  `RUSTUP_TOOLCHAIN=1.99.0`), and `cmake` and `git`. `whisper_cpp`,
-  `llama_cpp_ex` and `cpu_topology` build their native code from source for
+  `RUSTUP_TOOLCHAIN=1.99.0`), and `cmake` and `git`. `whisper_cpp` and
+  `llama_cpp_ex` build their native code from source for
   the phone's ARMv8.0 cores: `mix.exs` sets the flags for target builds
   (plain `armv8-a`, no dot-product or fp16 instructions; the precompiled
   `whisper_cpp` artifact needs ARMv8.2 and is never used).
@@ -126,7 +126,6 @@ mix upload
 nerves_livebook_fp3
 ├── nerves_system_fp3   kernel, bootloader glue, daemons (rmtfs, qbootctl, …)
 ├── nerves_ai           the AI composer: LLM / STT / Vision facades, model downloads, WAV
-│   ├── cpu_topology    topology, thread affinity (Rust NIF)
 │   └── nerves_data_resize  first-boot F2FS grow
 ├── llama_cpp_ex        LLM engine (llama.cpp)
 ├── whisper_cpp         speech to text engine (whisper.cpp, Silero VAD)
