@@ -4,9 +4,9 @@
 
 This notebook runs machine-learning models on the phone's CPU, with no GPU
 or cloud service: object detection on a camera photo, speech to text, and a
-chat with a small language model. First it looks at the CPU they run on and
-at how slowly plain Elixir tensors run on it. It builds on the earlier
-notebooks: Wi-Fi (01), the camera (05) and audio (10).
+chat with a small language model. First it looks at how slowly plain Elixir
+tensors run on it. It builds on the earlier notebooks: Wi-Fi (01), the
+camera (05) and audio (10).
 
 ## The stack
 
@@ -22,109 +22,35 @@ The AI stack has three kinds of parts:
   capability (`NervesAI.LLM`, `NervesAI.STT`, `NervesAI.Vision`), downloads
   model files with checksums (`NervesAI.Models`), reads and writes WAV files
   (`NervesAI.Audio.WAV`).
-* **`cpu_topology`** provides the CPU topology and thread pinning. At boot
-  `nerves_ai` uses it to pin the VM's threads that run native code to the
-  fast cluster and to tell the engines to use four threads. **`nerves_data_resize`** grows the data partition on first boot
-  so models fit.
+* **`nerves_data_resize`** grows the data partition on first boot so models
+  fit.
 
 Nothing is configured to start at boot. This notebook downloads each model
 when you need it and starts the matching capability with `Kino.start_child/1`.
-
-## The CPU
 
 The Snapdragon 632 has two clusters of four Kryo 250 cores: `cpu0-3` are
 the slower "Silver" cores and `cpu4-7` the faster "Gold" cores. Neither
 cluster has the dot-product or half-precision instructions that newer ARM
 chips use to speed up model maths, so the native libraries are built for
-plain ARMv8.0. `cpu_topology` reads the layout from `/sys`:
+plain ARMv8.0. The engines use four threads each.
 
-```elixir
-CpuTopology.topology()
-```
-
-### Where the VM's threads run
-
-At boot `nerves_ai` pinned the BEAM's *dirty* schedulers (where
-native code such as llama.cpp runs, and whose threads the engines' worker
-pools inherit their CPUs from) to the Gold cores `cpu4-7`, and the normal
-schedulers to `cpu0-3`. `CpuTopology.Affinity.report/1` lists the threads.
-`outside` holds the dirty threads that are allowed on a CPU outside the
-expected ones:
-
-```elixir
-gold = CpuTopology.fastest_cpus()
-report = CpuTopology.Affinity.report(expect: gold)
-
-for t <- report.by_class.dirty do
-  %{thread: t.name, allowed_cpus: Enum.join(t.allowed, ","), last_ran_on: t.cpu}
-end
-|> Kino.DataTable.new()
-```
-
-```elixir
-%{expected: gold, outside: length(report.outside)}
-```
-
-### Does running the CPU at full speed help?
-
-No. A "run fast" lease that held the Gold cluster at full speed (frequency
-clamp, governor switch) was measured around a 64 MB SHA-256, the vision model
-and the LLM on this phone: no measurable gain, because `schedutil` ramps the
-clock within milliseconds. What matters is thread placement on the Gold
-cores. The process-level proof is the busy time per CPU: while a model runs,
-the busy time accumulated on `cpu4-7` grows much faster than on `cpu0-3`.
+Two things were measured and dropped because they made no measurable
+difference on this phone: a "run fast" lease holding the Gold cluster at
+full speed around a burst (`schedutil` already ramps the clock within
+milliseconds), and pinning the VM's threads to the Gold cluster (the
+kernel already schedules this CPU-bound work onto the Gold cores on its
+own — alternating pinned and unpinned runs of the pipelines below showed
+no timing difference).
 
 ## Tensors on the BEAM
 
-[Nx](https://hexdocs.pm/nx) is Elixir's tensor library. Its default
-`Nx.BinaryBackend` is written in plain Elixir: portable, and very slow on a
-phone. This firmware sets [`NxEigen.Backend`](https://hexdocs.pm/nx_eigen) as
-the default (`config :nx, default_backend: NxEigen.Backend`): the Eigen C++
-library with NEON, built for this CPU. Here is what a 640×640 RGB `u8` image
-costs on each backend for the steps a YOLO pre-processing needs, plus a
-512×512 matrix product (milliseconds, best of three). Your notebook process
-runs on a normal scheduler, so on the Silver cores.
-
-```elixir
-best_ms = fn fun ->
-  1..3
-  |> Enum.map(fn _ ->
-    {us, _} = :timer.tc(fn -> fun.() end)
-    us / 1000
-  end)
-  |> Enum.min()
-  |> Float.round(1)
-end
-
-# Constants such as the pad value are created on the default backend, and
-# Nx cannot mix backends in one operation, so each variant runs with its own
-# backend as the default.
-bench = fn backend ->
-  Nx.with_default_backend(backend, fn ->
-    img = Nx.broadcast(Nx.u8(128), {640, 640, 3})
-    floats = Nx.as_type(img, :f32)
-    a = Nx.iota({128, 128}, type: :f32)
-
-    %{
-      pad: best_ms.(fn -> Nx.pad(img, 114, [{80, 80, 0}, {0, 0, 0}, {0, 0, 0}]) end),
-      transpose: best_ms.(fn -> Nx.transpose(img, axes: [2, 0, 1]) end),
-      as_type_f32: best_ms.(fn -> Nx.as_type(img, :f32) end),
-      divide_255: best_ms.(fn -> Nx.divide(floats, 255) end),
-      dot_128: best_ms.(fn -> Nx.dot(a, a) end)
-    }
-  end)
-end
-
-%{
-  eigen: bench.(NxEigen.Backend),
-  binary: bench.(Nx.BinaryBackend)
-}
-```
-
-The object detector below does its image work in OpenCV, which has its own
-NEON code; Nx is there for your own tensor code and for libraries such as
-`nx_image` and `nx_signal`. (The binary backend's `dot_128` is already slow;
-a 512×512 product takes it about a minute on a fast desktop.)
+[Nx](https://hexdocs.pm/nx) is Elixir's tensor library. This firmware sets
+[`NxEigen.Backend`](https://hexdocs.pm/nx_eigen) as its default backend
+(`config :nx, default_backend: NxEigen.Backend`): the Eigen C++ library with
+NEON, built for this CPU, rather than Nx's plain Elixir backend, which is
+far too slow on a phone. The object detector below does its image work in
+OpenCV; Nx is there for your own tensor code and for libraries such as
+`nx_image` and `nx_signal`.
 
 ## Models: downloaded when you need them
 
@@ -161,17 +87,24 @@ catalog = %{
 Map.keys(catalog)
 ```
 
-Two helpers for the steps below: `fetch` downloads a model (printing
-progress) and returns its path, and `start` starts a capability under this
-notebook's supervisor and waits for its model to load.
+Two helpers for the steps below: `fetch` downloads a model (printing a
+heartbeat so a multi-minute download on slow Wi-Fi doesn't look hung) and
+returns its path, and `start` starts a capability under this notebook's
+supervisor and waits for its model to load.
 
 ```elixir
 fetch = fn id, spec ->
-  progress = fn bytes, total ->
-    IO.puts("#{id}: #{div(bytes, 1_000_000)} of #{(total && div(total, 1_000_000)) || "?"} MB")
-  end
+  heartbeat =
+    Task.async(fn ->
+      Stream.interval(5_000)
+      |> Stream.each(fn n -> IO.puts("#{id}: still downloading... (#{(n + 1) * 5} s)") end)
+      |> Stream.run()
+    end)
 
-  case NervesAI.Models.ensure_one(id, spec, on_progress: progress, progress_step: 50_000_000) do
+  result = NervesAI.Models.ensure_one(id, spec)
+  Task.shutdown(heartbeat, :brutal_kill)
+
+  case result do
     {:ok, path} ->
       path
 
@@ -208,10 +141,7 @@ interface to call.
 ```elixir
 yolo_path = fetch.(:yolov5n, catalog.yolov5n)
 
-start.(NervesAI.Vision.Evision,
-  adapter: NervesAI.Vision.Evision,
-  path: yolo_path
-)
+start.(NervesAI.Vision.Evision, path: yolo_path)
 ```
 
 ### Take a photo and detect
@@ -235,8 +165,7 @@ end
 ```
 
 `detect/3` takes `conf:` (minimum score, default 0.25) and `iou:` options.
-`NervesAI.Vision.annotate/4` writes a copy of the photo with the boxes
-drawn on it; this cell draws them as an SVG instead.
+This cell draws the boxes as an SVG overlay on the photo.
 
 ### See it
 
@@ -263,6 +192,94 @@ Kino.HTML.new("""
 """)
 ```
 
+### Live detection
+
+The same model on live video. The camera ISP hands over 640×480 frames
+at 30 fps, and each one is shown with the latest boxes drawn on it, so
+the video stays real time. Detection takes about 300 ms, so it runs on
+its own beside the video, always on the newest frame, and the boxes
+jump a few times a second to keep up. OpenCV gets 4 of the 8 cores for
+it and the video keeps the others.
+
+Press **Stop** to end it.
+
+```elixir
+camera = :rear
+video = Kino.Frame.new() |> Kino.render()
+stop = Kino.Control.button("Stop") |> Kino.render()
+Kino.Control.subscribe(stop, :stop)
+
+Evision.setNumThreads(4)
+
+# Asks for a frame whenever it's free, and sends back what it found in it
+parent = self()
+
+detector =
+  spawn_link(fn ->
+    detect = fn detect ->
+      send(parent, {:free, self()})
+
+      receive do
+        {:frame, bgr} ->
+          send(parent, {:detections, NervesAI.Vision.detect(NervesAI.Vision, bgr)})
+          detect.(detect)
+
+        :stop ->
+          :ok
+      end
+    end
+
+    detect.(detect)
+  end)
+
+draw = fn bgr, detections ->
+  Enum.reduce(detections, bgr, fn %{box: [x1, y1, x2, y2], label: label, score: score}, img ->
+    img
+    |> Evision.rectangle({round(x1), round(y1)}, {round(x2), round(y2)}, {0, 255, 255},
+      thickness: 2
+    )
+    |> Evision.putText("#{label} #{round(score * 100)}%", {round(x1) + 4, round(y1) + 16},
+      Evision.Constant.cv_FONT_HERSHEY_SIMPLEX(), 0.5, {0, 255, 255}
+    )
+  end)
+end
+
+{:ok, feed} = Fp3Camera.subscribe(camera, width: 640, height: 480)
+
+show = fn show, detections, free ->
+  receive do
+    {:stop, _event} ->
+      :stopped
+
+    {:detections, detections} ->
+      show.(show, detections, free)
+
+    {:free, detector} ->
+      show.(show, detections, detector)
+
+    {:camera_frame, %{data: nv12, width: w, height: h}} ->
+      bgr =
+        nv12
+        |> Evision.Mat.from_binary({:u, 8}, div(h * 3, 2), w, 1)
+        |> Evision.cvtColor(Evision.Constant.cv_COLOR_YUV2BGR_NV12())
+
+      if free, do: send(free, {:frame, bgr})
+
+      jpeg =
+        Evision.imencode(".jpg", draw.(bgr, detections),
+          params: [Evision.Constant.cv_IMWRITE_JPEG_QUALITY(), 70]
+        )
+
+      Kino.Frame.render(video, Kino.Image.new(jpeg, :jpeg))
+      show.(show, detections, nil)
+  end
+end
+
+show.(show, [], nil)
+Fp3Camera.unsubscribe(feed)
+send(detector, :stop)
+```
+
 ## Speech to text (Whisper)
 
 **Whisper** turns speech into text. This is OpenAI's `tiny.en` model
@@ -286,7 +303,6 @@ vad_path =
   )
 
 start.(NervesAI.STT.WhisperCpp,
-  adapter: NervesAI.STT.WhisperCpp,
   path: whisper_path,
   vad_path: vad_path,
   language: "en"
@@ -359,11 +375,7 @@ trained.
 ```elixir
 llm_path = fetch.(:tinyllama, catalog.tinyllama)
 
-start.(NervesAI.LLM.LlamaCpp,
-  adapter: NervesAI.LLM.LlamaCpp,
-  path: llm_path,
-  n_ctx: 1024
-)
+start.(NervesAI.LLM.LlamaCpp, path: llm_path, n_ctx: 1024)
 ```
 
 ### Ask a question
@@ -399,44 +411,6 @@ IO.puts("\n\n#{pieces} pieces in #{Float.round(seconds, 1)} s")
 
 `NervesAI.LLM.chat/3` takes the same arguments and returns the whole answer
 at once.
-
-## Sound, generated
-
-The audio notebook (10) plays tones. `NervesAI.Audio.WAV` writes and reads
-the WAV files: samples are plain floats between -1.0 and 1.0.
-
-```elixir
-rate = 48_000
-volume = 0.1
-notes = [262, 294, 330, 349, 392, 440, 494, 523]
-
-melody =
-  for freq <- notes, n <- 0..(div(rate, 4) - 1) do
-    volume * :math.sin(2 * :math.pi() * freq * n / rate)
-  end
-
-:ok = NervesAI.Audio.WAV.write("/tmp/melody.wav", melody, rate: rate)
-System.cmd("aplay", ["-D", "plughw:0,0", "/tmp/melody.wav"], stderr_to_stdout: true)
-```
-
-### How loud was it?
-
-`NervesAI.Audio.WAV.read/1` returns the samples of any WAV file as mono
-floats. The recording from the speech step is split into tenths of a
-second, and each bar shows the loudest sample in that slice.
-
-```elixir
-{:ok, %{rate: rate, pcm_f32: pcm}} = NervesAI.Audio.WAV.read("/tmp/me.wav")
-
-for(<<s::float-32-little <- pcm>>, do: abs(s))
-|> Enum.chunk_every(div(rate, 10))
-|> Enum.map(fn slice ->
-  peak = Enum.max(slice)
-  String.duplicate("█", round(peak * 50)) <> " #{Float.round(peak, 2)}"
-end)
-|> Enum.join("\n")
-|> IO.puts()
-```
 
 ## Already on this phone
 
