@@ -118,12 +118,17 @@ defmodule NervesLivebookFP3.MixProject do
       {:blue_heron, github: "mlainez/blue_heron", targets: :nerves_system_fp3},
 
       # ---------------- The nerves_system_fp3 ----------------
-      # The prebuilt system comes from the tag's GitHub release.
+      # The prebuilt system normally comes from the tag's GitHub release.
+      # `nerves: [compile: true]` forces a local Buildroot build instead, so
+      # deps/nerves_system_fp3/local.mk's LINUX_OVERRIDE_SRCDIR (a patched
+      # kernel checkout) actually gets used instead of being silently
+      # ignored in favor of the matching prebuilt release.
       {:nerves_system_fp3,
        github: "mlainez/nerves_system_fp3",
        tag: "v0.2.2",
        runtime: false,
-       targets: :nerves_system_fp3}
+       targets: :nerves_system_fp3,
+       nerves: [compile: true]}
     ]
   end
 

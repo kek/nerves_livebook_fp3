@@ -37,6 +37,12 @@
             # scripts/flash-fp3.sh (fastboot, adb)
             pkgs.android-tools
 
+            # Buildroot's own host prerequisites (nerves_system_fp3 README),
+            # only exercised when actually building the system from source
+            # (nerves: [compile: true]) rather than using the prebuilt release.
+            pkgs.cmake
+            pkgs.bc
+
             # Building NIFs (input_event, nerves_uevent, vintage_net_wifi,
             # arm_ai's Rust NIF, ...)
             pkgs.gnumake
@@ -46,12 +52,11 @@
             pkgs.automake
             pkgs.libtool
             pkgs.openssl
-            pkgs.libmnl
-            pkgs.libnl
 
             # Fetching deps and the prebuilt nerves_system_fp3 release
             pkgs.git
             pkgs.curl
+            pkgs.wget
             pkgs.unzip
 
             # arm_ai has no precompiled release; it always builds its NIF
