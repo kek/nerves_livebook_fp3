@@ -89,15 +89,16 @@ config :livebook,
 # symlink to /root, so /data/... and /root/... are the same storage.
 config :nerves_livebook_fp3, notebooks_dest: "/data/livebook/notebooks"
 
-# No models are downloaded at boot: each AI notebook fetches its own
-# with NervesModelHub.ensure_one/2 when the phone is online.
-config :nerves_ai, :models, []
+# At boot nerves_ai pins the VM's dirty schedulers to the fast cluster and
+# runs the first-boot partition grow (configured below). No models are
+# configured: the AI notebook fetches its models when the phone is online.
 
 # Scenic's asset library (fonts); see lib/nerves_livebook_fp3/assets.ex.
 config :scenic, :assets, module: NervesLivebookFP3.Assets
 
-# First-boot grow of the /root partition and its F2FS (idempotent: the
-# resizer reports :already_grown once the FS fills userdata). A phone
+# First-boot grow of the /root partition and its F2FS, run once by the
+# nerves_ai at boot (idempotent: the resizer reports :already_grown once the
+# FS fills userdata). A phone
 # flashed with fastboot keeps the image's partition size, so the
 # partition itself is grown too, by the system's ops.fw grow-app task.
 config :nerves_data_resize, :config,

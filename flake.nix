@@ -52,6 +52,11 @@
             pkgs.automake
             pkgs.libtool
             pkgs.openssl
+            # nerves_uevent's host-target build (mix test/mix run). Not
+            # libnl too: that one caused Nix's pkg-config wrapper to leak
+            # the host's libnl into Buildroot's cross builds, which already
+            # get their own libnl from the target sysroot (BR2_PACKAGE_LIBNL).
+            pkgs.libmnl
 
             # Fetching deps and the prebuilt nerves_system_fp3 release
             pkgs.git

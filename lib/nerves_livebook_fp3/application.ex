@@ -17,6 +17,7 @@ defmodule NervesLivebookFP3.Application do
     children = [
       {Scenic, []},
       {Task, fn -> NervesLivebookFP3.Launcher.start_at_boot(NervesLivebookFP3.Supervisor) end}
+      | microphone_warm_up()
     ]
 
     with {:ok, pid} <-
@@ -26,6 +27,51 @@ defmodule NervesLivebookFP3.Application do
            ) do
       validate_firmware()
       {:ok, pid}
+    end
+  end
+
+  # The first capture after boot records silence on both models; later ones
+  # are fine. A throwaway capture as soon as the card exists means the first
+  # recording anyone makes already works.
+  @microphone_route [
+    {"MultiMedia2 Mixer SLIMBUS_0_TX", :on},
+    {"SLIM TX7 MUX", "DEC7"},
+    {"ADC MUX7", "DMIC"},
+    {"DMIC MUX7", "DMIC1"},
+    {"AIF1_CAP Mixer SLIM TX7", :on}
+  ]
+
+  defp microphone_warm_up do
+    if Nerves.Runtime.mix_target() == :host,
+      do: [],
+      else: [Supervisor.child_spec({Task, &warm_up_microphone/0}, id: :microphone_warm_up)]
+  end
+
+  defp warm_up_microphone do
+    if wait_for_card(120) do
+      Enum.each(@microphone_route, fn {name, value} -> ExAudio.cset(name, value) end)
+
+      case System.cmd("arecord", ~w(-q -D hw:0,1 -f S16_LE -r 48000 -c 1 -d 1 /dev/null),
+             stderr_to_stdout: true
+           ) do
+        {_, 0} -> :ok
+        {out, _} -> Logger.warning("[workshop] microphone warm-up failed: #{String.trim(out)}")
+      end
+    else
+      Logger.warning("[workshop] no sound card, microphone not warmed up")
+    end
+  end
+
+  # The card appears once the ADSP is up; its controls a moment later.
+  defp wait_for_card(0), do: false
+
+  defp wait_for_card(tries) do
+    if File.exists?("/proc/asound/card0") do
+      Process.sleep(1_000)
+      true
+    else
+      Process.sleep(500)
+      wait_for_card(tries - 1)
     end
   end
 

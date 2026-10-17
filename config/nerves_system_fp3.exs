@@ -1,5 +1,8 @@
 import Config
 
+# Nx tensors live in Eigen (NEON) instead of the pure-Elixir backend.
+config :nx, default_backend: NxEigen.Backend
+
 # Boot order: nerves_ai runs the first-boot F2FS resize (which briefly
 # unmounts /root) before Livebook starts writing to /data.
 config :shoehorn,

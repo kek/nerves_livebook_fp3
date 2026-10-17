@@ -7,6 +7,6 @@ defmodule NervesLivebookFP3 do
   boot and starred so they appear on Livebook's home page.
 
   Models are not in the firmware image: each AI notebook downloads the
-  one it needs with `NervesModelHub.ensure_one/2`.
+  one it needs with `NervesAI.Models.ensure_one/3`.
   """
 end
