@@ -58,6 +58,28 @@ for erl_dir in $artifacts/build/erlang-[0-9]* $artifacts/build/host-erlang-[0-9]
   link_erlang_headers "$erl_dir"
 done
 
+# Buildroot's own host-patchelf build links dynamically against
+# libstdc++, which isn't on NixOS's default linker search path (nothing
+# is — every path on NixOS is a hashed store path), so the binary it
+# just built can't even run ("error while loading shared libraries").
+# nerves_system_fp3's nixos-build-patches branch carries a real fix
+# (statically linking libstdc++/libgcc) but isn't adopted by this
+# project yet, so swap in the Nix shell's own patchelf meanwhile — same
+# glibc, so it's a safe drop-in.
+for patchelf_bin in $artifacts/host/bin/patchelf; do
+  [ -e "$patchelf_bin" ] || continue
+  if ldd "$patchelf_bin" 2>/dev/null | grep -q 'libstdc++.so.6 => not found'; then
+    nix_patchelf="$(command -v patchelf || true)"
+    if [ -n "$nix_patchelf" ]; then
+      cp "$nix_patchelf" "$patchelf_bin"
+      echo "swapped $patchelf_bin for $nix_patchelf"
+      fixed=$((fixed + 1))
+    else
+      echo "COULD NOT FIX: $patchelf_bin can't load libstdc++, and no patchelf on PATH to swap in"
+    fi
+  fi
+done
+
 if [ "$fixed" -eq 0 ]; then
   echo "nothing to fix"
 fi
