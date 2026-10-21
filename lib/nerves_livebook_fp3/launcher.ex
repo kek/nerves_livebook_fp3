@@ -6,9 +6,14 @@ defmodule NervesLivebookFP3.Launcher do
       NervesLivebookFP3.Launcher.start()
       NervesLivebookFP3.Launcher.stop()
 
-  To start it at boot on this phone, run `autostart(true)` once. The
-  setting is a file on `/data`, so it survives firmware updates and is off
-  on a freshly flashed phone.
+  Starts at boot by default. The setting is a file on `/data`, so it
+  survives firmware updates; run `autostart(false)` to opt a phone out.
+
+  The power button blanks the screen and wakes it again; blanked, it cuts
+  the backlight entirely to use as little power as possible, and wakes
+  instantly on the next press. The screen also blanks on its own after a
+  period of inactivity; see `screen_blank_timeout` in `config.exs`. Suspend
+  is manual only, from the "Suspend" button on the status screen.
 
   Only one UI can own the display, so stop Scenic and Emerge viewports
   from other notebooks first. Once a viewport has been stopped, Emerge
@@ -29,15 +34,22 @@ defmodule NervesLivebookFP3.Launcher do
     start_link(drm_card: drm_card(), name: __MODULE__)
   end
 
-  @doc "Turns starting the launcher at boot on or off for this phone."
-  def autostart(true) do
+  @doc """
+  Turns starting the launcher at boot on or off for this phone. On by
+  default, so a freshly flashed phone starts the launcher without having
+  to call this first; call `autostart(false)` to opt a phone out.
+  """
+  def autostart(enabled) when is_boolean(enabled) do
     File.mkdir_p!(Path.dirname(@autostart))
-    File.touch!(@autostart)
+    File.write!(@autostart, to_string(enabled))
   end
 
-  def autostart(false), do: File.rm(@autostart)
-
-  def autostart?, do: File.exists?(@autostart)
+  def autostart? do
+    case File.read(@autostart) do
+      {:ok, value} -> value == "true"
+      {:error, _} -> true
+    end
+  end
 
   @doc """
   Starts the launcher under `supervisor` if autostart is on. The display
@@ -87,10 +99,18 @@ defmodule NervesLivebookFP3.Launcher do
 
   defp backlight, do: "/sys/class/backlight/*" |> Path.wildcard() |> List.first()
 
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  # Idle timeouts in ms, or nil to disable. Configurable per build in
+  # config.exs; see LAUNCHER.md.
+  defp screen_blank_timeout,
+    do: Application.get_env(:nerves_livebook_fp3, :screen_blank_timeout, :timer.minutes(2))
+
   @impl Viewport
   def mount(opts) do
     # mount runs inside the viewport process, so the timer messages come here.
     :timer.send_interval(2_000, :refresh)
+    :timer.send_interval(1_000, :check_idle)
 
     # Key events from the power button come to this process as
     # {:input_event, path, events}.
@@ -103,7 +123,8 @@ defmodule NervesLivebookFP3.Launcher do
       Map.merge(status(), %{
         asleep: false,
         waking: false,
-        brightness: read(backlight() <> "/brightness")
+        brightness: read(backlight() <> "/brightness"),
+        last_active: now_ms()
       })
 
     # Raw touch presses go to handle_input/2, which tells us when touch works
@@ -125,34 +146,57 @@ defmodule NervesLivebookFP3.Launcher do
   # means it is back.
   @impl Viewport
   def handle_input(_event, %{waking: true} = state),
-    do: {:noreply, Viewport.rerender(Map.merge(%{state | waking: false}, status()))}
+    do:
+      {:noreply,
+       Viewport.rerender(Map.merge(%{state | waking: false, last_active: now_ms()}, status()))}
 
-  def handle_input(_event, state), do: {:noreply, state}
+  def handle_input(_event, state), do: {:noreply, %{state | last_active: now_ms()}}
 
   @impl Viewport
   def handle_info(:refresh, %{asleep: true} = state), do: {:noreply, state}
   def handle_info(:refresh, %{waking: waking} = state) when waking != false, do: {:noreply, state}
   def handle_info(:refresh, state), do: {:noreply, Viewport.rerender(Map.merge(state, status()))}
 
-  # Brightness 0 also turns off touch, so dim to the lowest level instead
-  # and keep the screen tappable.
+  # A tick of the idle clock: blanks the screen after screen_blank_timeout
+  # with no touch. Suspend never happens on its own.
+  def handle_info(:check_idle, %{waking: waking} = state) when waking != false,
+    do: {:noreply, state}
+
+  def handle_info(:check_idle, %{asleep: true} = state), do: {:noreply, state}
+
+  def handle_info(:check_idle, state) do
+    if timeout_elapsed?(screen_blank_timeout(), now_ms() - state.last_active),
+      do: handle_info(:sleep, state),
+      else: {:noreply, state}
+  end
+
+  # Cuts the backlight entirely rather than dimming, so blanked is the
+  # lowest-power state short of suspend. That also kills touch, so waking
+  # from here is meant to go through the power button; the full-screen tap
+  # target below is left in place in case touch still gets through.
   def handle_info(:sleep, state) do
-    File.write!(backlight() <> "/brightness", "1")
+    File.write!(backlight() <> "/brightness", "0")
     {:noreply, Viewport.rerender(%{state | asleep: true})}
   end
 
   def handle_info(:wake, state) do
     File.write!(backlight() <> "/brightness", state.brightness)
-    {:noreply, Viewport.rerender(Map.merge(%{state | asleep: false}, status()))}
+
+    {:noreply,
+     Viewport.rerender(Map.merge(%{state | asleep: false, last_active: now_ms()}, status()))}
   end
 
-  # The power button suspends only from the status screen. The press that
-  # wakes the phone also arrives here after resume; waking is true then, so
-  # it is ignored.
-  def handle_info({:input_event, _path, events}, %{asleep: false, waking: false} = state) do
-    if {:ev_key, :key_power, 1} in events,
-      do: handle_info(:suspend, state),
-      else: {:noreply, state}
+  # The power button toggles the blanked, low-power state: a press blanks
+  # the screen from the status screen, and wakes it from blanked. Suspend
+  # only happens from the UI button. A press right after a resume also
+  # arrives here, with waking still true; that one's ignored, since touch
+  # coming back is what ends the waking state.
+  def handle_info({:input_event, _path, events}, %{waking: false} = state) do
+    cond do
+      {:ev_key, :key_power, 1} not in events -> {:noreply, state}
+      state.asleep -> handle_info(:wake, state)
+      true -> handle_info(:sleep, state)
+    end
   end
 
   def handle_info({:input_event, _path, _events}, state), do: {:noreply, state}
@@ -178,6 +222,9 @@ defmodule NervesLivebookFP3.Launcher do
     IO.puts("Suspend failed: #{inspect(error)}")
     {:noreply, Viewport.rerender(Map.merge(%{state | waking: false}, status()))}
   end
+
+  defp timeout_elapsed?(nil, _idle_ms), do: false
+  defp timeout_elapsed?(timeout_ms, idle_ms), do: idle_ms >= timeout_ms
 
   defp status do
     {:ok, host} = :inet.gethostname()

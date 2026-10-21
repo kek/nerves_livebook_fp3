@@ -43,9 +43,10 @@ Livebook's home page. A notebook that's already on `/data` is never
 overwritten, so attendee edits survive reboots and firmware updates.
 
 The firmware also has a launcher, a status screen with battery, IP
-addresses and suspend. It's off by default, so workshop phones don't start
-it. To have the firmware start it at boot on one phone, run
-`NervesLivebookFP3.Launcher.autostart(true)` there and reboot. See
+addresses and suspend. It starts at boot by default, and blanks the
+screen (power button, or on its own after a period of inactivity) to the
+lowest-power state short of suspend. To opt one phone out, run
+`NervesLivebookFP3.Launcher.autostart(false)` there and reboot. See
 [`LAUNCHER.md`](LAUNCHER.md), including why it must not run as a Livebook
 app.
 
@@ -143,7 +144,7 @@ nerves_livebook_fp3
 ├── ex_rmtfs, ex_remoteproc   modem storage daemon, ADSP start-up
 ├── ex_qcom_smgr, fp3_camera, ex_audio, ex_nfc, ex_location, ex_qbootctl
 ├── fp3_modem, vintage_net_qmi, qmi   cellular (only with FP3_APN)
-├── NervesLivebookFP3.Launcher   status screen (only with autostart on)
+├── NervesLivebookFP3.Launcher   status screen (unless autostart is off)
 └── livebook + kino
 ```
 

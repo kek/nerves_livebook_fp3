@@ -7,8 +7,16 @@ each network interface, refreshed every two seconds.
 
 | Control | What it does |
 |---|---|
-| **Screen off** | Dims the backlight to its lowest level and blacks out the screen. Tap anywhere to wake. The backlight isn't turned off fully, because that also turns off touch. |
-| **Suspend**, or a short press on the power button | Shows a "Sleeping / waking" screen, then suspends the phone (`s2idle`). Wake it with the power button. Touch takes a few seconds to come back, so the screen stays until a tap gets through. |
+| **Screen off**, or a press on the power button | Cuts the backlight entirely and blacks out the screen — the lowest-power state short of suspend. A press on the power button wakes it instantly. Cutting the backlight also kills touch, so a tap is a fallback wake, not the main one. |
+| **Suspend** | Shows a "Sleeping / waking" screen, then suspends the phone (`s2idle`). Wake it with the power button. Touch takes a few seconds to come back, so the screen stays until a tap gets through. Only reachable from this button — never on its own, and the power button no longer triggers it. |
+
+The screen also blanks on its own after a period with no touch:
+`screen_blank_timeout` (default 2 minutes) in `config.exs`. Set it to
+`nil` to turn that off. The phone never suspends on its own.
+
+```elixir
+config :nerves_livebook_fp3, screen_blank_timeout: :timer.minutes(2)
+```
 
 ```elixir
 NervesLivebookFP3.Launcher.start()   # detaches the console, starts on the msm display
@@ -17,20 +25,21 @@ NervesLivebookFP3.Launcher.stop()    # stops it, gives the screen back to the co
 
 ## Starting it at boot
 
-The firmware starts the launcher at boot on phones where autostart is on.
-A task in `NervesLivebookFP3.Application` waits up to 30 seconds for the
-display driver, then starts the launcher as a temporary child of
-`NervesLivebookFP3.Supervisor`, so a crash doesn't restart it in a loop.
+The firmware starts the launcher at boot unless autostart has been turned
+off for this phone. A task in `NervesLivebookFP3.Application` waits up to
+30 seconds for the display driver, then starts the launcher as a
+temporary child of `NervesLivebookFP3.Supervisor`, so a crash doesn't
+restart it in a loop.
 
 ```elixir
-NervesLivebookFP3.Launcher.autostart(true)    # start at boot on this phone
-NervesLivebookFP3.Launcher.autostart(false)   # don't
+NervesLivebookFP3.Launcher.autostart(false)   # don't start at boot on this phone
+NervesLivebookFP3.Launcher.autostart(true)    # back to the default
 NervesLivebookFP3.Launcher.autostart?()
 ```
 
 The setting is the file `/data/launcher/autostart`. It survives firmware
-updates and is off on a freshly flashed phone, so workshop phones built
-from this repo don't start the launcher.
+updates and is on by default, so a freshly flashed phone starts the
+launcher without calling `autostart(true)` first.
 
 Don't run the launcher as a Livebook app. While a Livebook runtime is
 active, Livebook registers its own process as `:standard_error`. On this

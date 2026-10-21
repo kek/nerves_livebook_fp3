@@ -12,8 +12,8 @@ defmodule NervesLivebookFP3.Application do
     sync_notebooks() |> star_notebooks()
 
     # Scenic's supervisor, so notebooks can start viewports on the screen.
-    # The task starts the launcher once the display is up, on phones where
-    # NervesLivebookFP3.Launcher.autostart(true) was run.
+    # The task starts the launcher once the display is up, unless
+    # NervesLivebookFP3.Launcher.autostart(false) was run on this phone.
     children = [
       {Scenic, []},
       {Task, fn -> NervesLivebookFP3.Launcher.start_at_boot(NervesLivebookFP3.Supervisor) end}

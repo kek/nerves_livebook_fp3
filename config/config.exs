@@ -89,6 +89,10 @@ config :livebook,
 # symlink to /root, so /data/... and /root/... are the same storage.
 config :nerves_livebook_fp3, notebooks_dest: "/data/livebook/notebooks"
 
+# How long the launcher waits for a touch before blanking the screen.
+# Set to nil to disable. Suspend never happens on its own.
+config :nerves_livebook_fp3, screen_blank_timeout: :timer.minutes(2)
+
 # At boot nerves_ai pins the VM's dirty schedulers to the fast cluster and
 # runs the first-boot partition grow (configured below). No models are
 # configured: the AI notebook fetches its models when the phone is online.

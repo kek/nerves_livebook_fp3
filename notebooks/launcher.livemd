@@ -3,10 +3,13 @@
 ## Overview
 
 A status screen with hostname, time, battery and IP addresses, refreshed
-every two seconds. **Screen off** dims the backlight and blacks out the
-screen; tap anywhere to wake. **Suspend**, or a short press on the power
-button, puts the whole phone to sleep; wake it with the power key, then
-tap once touch is back.
+every two seconds. **Screen off**, or a press on the power button, cuts
+the backlight and blacks out the screen; the next power button press
+wakes it instantly (a tap works too, but isn't the main way in — cutting
+the backlight also kills touch). The screen also blanks on its own after
+a period of no touch (`screen_blank_timeout` in `config.exs`). **Suspend**
+puts the whole phone to sleep, only from this button; wake it with the
+power key, then tap once touch is back.
 
 The code is `NervesLivebookFP3.Launcher` in
 `lib/nerves_livebook_fp3/launcher.ex`. Edit it there and load it into the
@@ -14,11 +17,11 @@ running phone with `scripts/hot-load.sh`.
 
 ## Start at boot
 
-The firmware starts the launcher at boot on phones where autostart is on.
-It's off on a freshly flashed phone:
+The firmware starts the launcher at boot unless autostart has been turned
+off for this phone. It's on by default on a freshly flashed phone:
 
 ```elixir
-NervesLivebookFP3.Launcher.autostart(true)
+NervesLivebookFP3.Launcher.autostart(false)
 ```
 
 ```elixir
