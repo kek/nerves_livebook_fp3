@@ -42,7 +42,8 @@ defmodule NervesLivebookFP3.MixProject do
       archives: [nerves_bootstrap: "~> 1.14"],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      releases: [{@app, release()}]
+      releases: [{@app, release()}],
+      aliases: aliases()
     ]
   end
 
@@ -172,6 +173,22 @@ defmodule NervesLivebookFP3.MixProject do
     ]
   end
 
+  defp aliases do
+    [firmware: [&rebuild_ex_nfc_nif/1, "firmware"]]
+  end
+
+  # ex_nfc's compiled NIF has no per-target filename (unlike emerge's
+  # rustler_precompiled one), and Mix always symlinks a dependency's priv/
+  # back to deps/ex_nfc/priv, shared across every MIX_TARGET. A host
+  # compile or test run (`mix test`, `iex -S mix`, a bare `mix compile`)
+  # overwrites it with an x86_64 build, and nothing tells the next
+  # firmware build that happened — it just ships the wrong architecture.
+  # Force a fresh, correctly-targeted compile right before every firmware
+  # build so a stale host build can never leak through.
+  defp rebuild_ex_nfc_nif(_args) do
+    if Mix.target() != :host, do: Mix.Task.run("deps.compile", ["ex_nfc", "--force"])
+  end
+
   # A sibling comes from a local checkout when its *_PATH variable is set,
   # from GitHub otherwise.
   defp sibling(app, env) do
@@ -186,10 +203,27 @@ defmodule NervesLivebookFP3.MixProject do
       overwrite: true,
       cookie: "#{@app}_cookie",
       include_erts: &Nerves.Release.erts/0,
-      steps: [&Nerves.Release.init/1, :assemble],
+      steps: [&Nerves.Release.init/1, :assemble, &drop_host_arch_nifs/1],
       # Livebook runs doctests with ExUnit and shows docs in the editor.
       applications: [ex_unit: :load],
       strip_beams: [keep: ["Docs"]]
     ]
+  end
+
+  # emerge (rustler_precompiled) ships one precompiled NIF per target
+  # triple side by side in priv/native, so the same dependency works
+  # unmodified on host and on the phone. nerves_system_br's
+  # scrub-otp-release.sh doesn't know that's intentional: it finds the
+  # x86_64 one sitting in an aarch64 release and aborts `mix firmware`.
+  # Drop it from the assembled release before scrub ever sees it.
+  defp drop_host_arch_nifs(release) do
+    if Mix.target() != :host do
+      release.path
+      |> Path.join("lib/*/priv/native/*x86_64-unknown-linux-gnu*")
+      |> Path.wildcard()
+      |> Enum.each(&File.rm!/1)
+    end
+
+    release
   end
 end
