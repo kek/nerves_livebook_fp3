@@ -83,9 +83,14 @@ it with `mix firmware && mix upload`.
   open, since Livebook swaps `:standard_error` then too. `ssh -T` (no
   line editing) and `ssh nerves.local '<elixir>'` keep working; a reboot
   clears it.
-- A suspend longer than about 30 seconds can reboot the phone. The likely
-  cause is `heart` (`HEART_BEAT_TIMEOUT 30` in `rel/vm.args.eex`) counting
-  the suspended time as a hung VM. Not confirmed yet.
+- An earlier version of this list said a suspend longer than about 30
+  seconds could reboot the phone, and blamed `heart`. That doesn't happen
+  on the current firmware. Suspends of 75 seconds and 5 minutes on USB
+  power, and about an hour on battery (started from the Suspend button,
+  woken with the power button), all resumed without a reboot. `heart`
+  couldn't have caused it anyway: nerves_heart and the kernel's software
+  watchdog both time against `CLOCK_MONOTONIC`, which stops while the
+  phone is suspended, so time asleep never counts toward their timeouts.
 - After resume, the kernel logs errors from the camera drivers (`ak7375`,
   `s5k4h7yx`). They don't affect the launcher.
 - On a Mac's USB port the phone may charge slowly or not at all: in USB
