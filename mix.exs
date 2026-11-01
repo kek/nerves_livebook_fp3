@@ -18,6 +18,10 @@ defmodule NervesLivebookFP3.MixProject do
     for {key, value} <- [
           {"LLAMA_BACKEND", "cpu"},
           {"LLAMA_CPU_ARM_ARCH", "armv8-a"},
+          # Without a toolchain file, CMake takes the processor from the build
+          # machine. On x86_64 hosts ggml then adds its x86 sources to the
+          # ARM build, and the NIF fails to link on duplicate symbols.
+          {"LLAMA_CMAKE_ARGS", "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64"},
           {"WHISPER_CPP_BUILD", "1"},
           {"GGML_NATIVE", "OFF"},
           {"GGML_CPU_ARM_ARCH", "armv8-a"},
