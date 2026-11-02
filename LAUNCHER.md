@@ -7,7 +7,7 @@ each network interface, refreshed every two seconds.
 
 | Control | What it does |
 |---|---|
-| **Screen off**, or a press on the power button | Cuts the backlight entirely and blacks out the screen — the lowest-power state short of suspend. A press on the power button wakes it instantly. Cutting the backlight also kills touch, so a tap is a fallback wake, not the main one. |
+| **Screen off**, or a press on the power button | Cuts the backlight and powers down the panel and display pipeline — the lowest-power state short of suspend. Networking keeps running. A press on the power button wakes it in about 150 ms, and touch works straight away. The panel being off also kills touch, so a tap is a fallback wake, not the main one. |
 | **Suspend** | Shows a "Sleeping / waking" screen, then suspends the phone (`s2idle`). Wake it with the power button. Touch takes a few seconds to come back, so the screen stays until a tap gets through. Only reachable from this button — never on its own, and the power button no longer triggers it. |
 
 The screen also blanks on its own after a period with no touch:
@@ -91,6 +91,10 @@ it with `mix firmware && mix upload`.
   couldn't have caused it anyway: nerves_heart and the kernel's software
   watchdog both time against `CLOCK_MONOTONIC`, which stops while the
   phone is suspended, so time asleep never counts toward their timeouts.
+- Each time the display powers down, the kernel logs a `vblank timeout` and
+  `wait for commit done returned -110` from `msm_dpu`. The display comes back
+  normally afterwards, so this looks harmless, but the cause hasn't been
+  looked into.
 - After resume, the kernel logs errors from the camera drivers (`ak7375`,
   `s5k4h7yx`). They don't affect the launcher.
 - On a Mac's USB port the phone may charge slowly or not at all: in USB

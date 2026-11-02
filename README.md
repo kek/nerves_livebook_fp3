@@ -81,6 +81,10 @@ the phone to Wi-Fi, and start the matching capability (`NervesAI.LLM`,
   the phone's ARMv8.0 cores: `mix.exs` sets the flags for target builds
   (plain `armv8-a`, no dot-product or fp16 instructions; the precompiled
   `whisper_cpp` artifact needs ARMv8.2 and is never used).
+* `clang`, `libclang`, `gn`, `ninja` and `python3`, because the `kek/emerge`
+  fork's NIF is built from source for the phone, Skia included. `flake.nix`
+  provides them, with an unwrapped `clang`: Nix's wrapper adds the host's
+  glibc headers, which breaks the cross-compile.
 * An SSH public key in `~/.ssh`, which is baked into the firmware for
   `mix upload` and SSH access.
 

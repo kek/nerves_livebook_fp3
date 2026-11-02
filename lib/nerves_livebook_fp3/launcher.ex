@@ -10,8 +10,8 @@ defmodule NervesLivebookFP3.Launcher do
   survives firmware updates; run `autostart(false)` to opt a phone out.
 
   The power button blanks the screen and wakes it again; blanked, it cuts
-  the backlight entirely to use as little power as possible, and wakes
-  instantly on the next press. The screen also blanks on its own after a
+  the backlight and powers down the panel and display pipeline to use as
+  little power as possible, and wakes on the next press. The screen also blanks on its own after a
   period of inactivity; see `screen_blank_timeout` in `config.exs`. Suspend
   is manual only, from the "Suspend" button on the status screen.
 
@@ -170,17 +170,21 @@ defmodule NervesLivebookFP3.Launcher do
       else: {:noreply, state}
   end
 
-  # Cuts the backlight entirely rather than dimming, so blanked is the
-  # lowest-power state short of suspend. That also kills touch, so waking
-  # from here is meant to go through the power button; the full-screen tap
-  # target below is left in place in case touch still gets through.
+  # Cuts the backlight, then powers down the panel and display pipeline, so
+  # blanked is the lowest-power state short of suspend. That also kills
+  # touch, so waking from here is meant to go through the power button; the
+  # full-screen tap target below is left in place in case touch still gets
+  # through.
   def handle_info(:sleep, state) do
     File.write!(backlight() <> "/brightness", "0")
-    {:noreply, Viewport.rerender(%{state | asleep: true})}
+    state = Viewport.rerender(%{state | asleep: true})
+    Viewport.set_display_power(state, false)
+    {:noreply, state}
   end
 
   def handle_info(:wake, state) do
-    File.write!(backlight() <> "/brightness", state.brightness)
+    Viewport.set_display_power(state, true)
+    restore_brightness(state.brightness)
 
     {:noreply,
      Viewport.rerender(Map.merge(%{state | asleep: false, last_active: now_ms()}, status()))}
@@ -222,6 +226,25 @@ defmodule NervesLivebookFP3.Launcher do
     IO.puts("Suspend failed: #{inspect(error)}")
     {:noreply, Viewport.rerender(Map.merge(%{state | waking: false}, status()))}
   end
+
+  # The panel powers up on the renderer's thread, and the backlight is set
+  # over the same DSI link, so the write fails until the panel is back.
+  defp restore_brightness(brightness, tries \\ 40)
+
+  defp restore_brightness(_brightness, 0), do: IO.puts("Couldn't restore the backlight")
+
+  defp restore_brightness(brightness, tries) do
+    with {:ok, "On" <> _} <- File.read(display_dpms()),
+         :ok <- File.write(backlight() <> "/brightness", brightness) do
+      :ok
+    else
+      _ ->
+        Process.sleep(50)
+        restore_brightness(brightness, tries - 1)
+    end
+  end
+
+  defp display_dpms, do: "/sys/class/drm/card*-DSI-*/dpms" |> Path.wildcard() |> List.first()
 
   defp timeout_elapsed?(nil, _idle_ms), do: false
   defp timeout_elapsed?(timeout_ms, idle_ms), do: idle_ms >= timeout_ms

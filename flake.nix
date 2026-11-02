@@ -68,10 +68,19 @@
             # from source, cross-compiled for the phone.
             pkgs.rustup
 
+            # kek/emerge builds Skia from source for the phone. Unwrapped
+            # clang: Nix's wrapper injects the host's glibc headers, which
+            # breaks cross-compiling.
+            pkgs.llvmPackages.clang-unwrapped
+            pkgs.gn
+            pkgs.ninja
+            pkgs.python3
+
             pkgs.glibcLocales
           ];
 
           LANG = "en_US.UTF-8";
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           LOCALE_ARCHIVE = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
             "${pkgs.glibcLocales}/lib/locale/locale-archive";
 
@@ -88,6 +97,8 @@
             export RUSTUP_HOME="$project_root/.nix-rustup"
             export CARGO_HOME="$project_root/.nix-cargo"
             export PATH="$MIX_HOME/bin:$HEX_HOME/bin:$CARGO_HOME/bin:$PATH"
+
+            export EMERGE_SKIA_HOST_PYTHON="$(command -v python3)"
 
             mix local.hex --if-missing --force >/dev/null
             mix local.rebar --if-missing --force >/dev/null

@@ -16,6 +16,9 @@ defmodule NervesLivebookFP3.MixProject do
   # the precompiled whisper_cpp artifact (ARMv8.2) is never used.
   if Mix.target() != :host do
     for {key, value} <- [
+          # Only a source build has set_display_power. Host builds use the
+          # precompiled NIF, because the launcher never runs there.
+          {"EMERGE_SKIA_BUILD", "1"},
           {"LLAMA_BACKEND", "cpu"},
           {"LLAMA_CPU_ARM_ARCH", "armv8-a"},
           # Without a toolchain file, CMake takes the processor from the build
@@ -120,8 +123,10 @@ defmodule NervesLivebookFP3.MixProject do
        github: "ScenicFramework/scenic_driver_local", ref: "9988a05", targets: :nerves_system_fp3},
 
       # Emerge UI on the screen (DRM + OpenGL ES through Mesa freedreno),
-      # with Solve for state. The native renderer is a precompiled NIF.
-      {:emerge, "~> 0.4.0"},
+      # with Solve for state. kek/emerge is v0.4.2 plus set_display_power, so
+      # the launcher can power the panel down. For the phone it builds Skia
+      # and the NIF from source, with the tools in flake.nix.
+      {:emerge, github: "kek/emerge", branch: "display-power"},
       {:solve, "~> 0.3.0"},
       # emerge needs rustler_precompiled ~> 0.8.4; whisper_cpp now wants
       # ~> 0.9.0. Force the older one — arm_ai, the other user, accepts
