@@ -31,6 +31,9 @@
             # the build; upstream fwup itself is fine.
             (pkgs.fwup.overrideAttrs (old: {
               hardeningDisable = (old.hardeningDisable or [ ]) ++ [ "format" ];
+              # The test suite creates multi-GB filesystem images and can
+              # exhaust the sandbox's temporary build filesystem.
+              doCheck = false;
             }))
             pkgs.squashfsTools
 
