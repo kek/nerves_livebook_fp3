@@ -23,6 +23,15 @@ NervesLivebookFP3.Launcher.start()   # detaches the console, starts on the msm d
 NervesLivebookFP3.Launcher.stop()    # stops it, gives the screen back to the console
 ```
 
+The launcher sets the backlight to `screen_brightness` (default 512, out of
+4095) when it starts. Brightness looks much the same from 4095 down to about
+1024, but the current doesn't: on battery with this screen showing, 4095 draws
+about 545 mA, 1024 about 339 mA, 512 about 304 mA and 256 less still.
+
+```elixir
+config :nerves_livebook_fp3, screen_brightness: 512
+```
+
 ## Starting it at boot
 
 The firmware starts the launcher at boot unless autostart has been turned

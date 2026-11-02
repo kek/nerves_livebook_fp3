@@ -93,6 +93,10 @@ config :nerves_livebook_fp3, notebooks_dest: "/data/livebook/notebooks"
 # Set to nil to disable. Suspend never happens on its own.
 config :nerves_livebook_fp3, screen_blank_timeout: :timer.minutes(2)
 
+# Backlight level while the launcher is awake, 0-4095. The panel's response
+# isn't linear: 512 draws about 240 mA less than 4095 on the status screen.
+config :nerves_livebook_fp3, screen_brightness: 512
+
 # At boot nerves_ai pins the VM's dirty schedulers to the fast cluster and
 # runs the first-boot partition grow (configured below). No models are
 # configured: the AI notebook fetches its models when the phone is online.

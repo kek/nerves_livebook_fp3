@@ -106,6 +106,11 @@ defmodule NervesLivebookFP3.Launcher do
   defp screen_blank_timeout,
     do: Application.get_env(:nerves_livebook_fp3, :screen_blank_timeout, :timer.minutes(2))
 
+  # The panel's response is far from linear: going from 4095 to 1024 looks
+  # about the same and saves around 200 mA. Configurable in config.exs.
+  defp screen_brightness,
+    do: Application.get_env(:nerves_livebook_fp3, :screen_brightness, 512) |> to_string()
+
   @impl Viewport
   def mount(opts) do
     # mount runs inside the viewport process, so the timer messages come here.
@@ -119,11 +124,13 @@ defmodule NervesLivebookFP3.Launcher do
       {:ok, _} = InputEvent.start_link(path: path)
     end
 
+    File.write!(backlight() <> "/brightness", screen_brightness())
+
     state =
       Map.merge(status(), %{
         asleep: false,
         waking: false,
-        brightness: read(backlight() <> "/brightness"),
+        brightness: screen_brightness(),
         last_active: now_ms()
       })
 
